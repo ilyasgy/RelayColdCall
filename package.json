@@ -1,0 +1,40 @@
+{
+  "name": "relay-cold-call-crm",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A focused cold-call lead operations CRM.",
+  "author": "Relay",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:desktop": "vite --host 127.0.0.1 --port 4183 --strictPort",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "desktop:dev": "concurrently --kill-others-on-fail \"npm:dev:desktop\" \"npm:desktop:launch\"",
+    "desktop:launch": "wait-on http://127.0.0.1:4183 && electron . --dev",
+    "desktop:pack": "npm run build && electron-builder --config electron-builder.config.cjs --dir --publish never",
+    "desktop:dist": "npm run release:verify && npm run build && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never",
+    "desktop:publish": "npm run release:verify && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish always",
+    "release:verify": "node scripts/verify-release.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^10.0.5",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14",
+    "vitest": "^2.1.8",
+    "wait-on": "^9.1.0"
+  }
+}

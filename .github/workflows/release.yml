@@ -1,0 +1,45 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_GITHUB_OWNER: ${{ vars.RELEASE_GITHUB_OWNER || github.repository_owner }}
+      RELEASE_GITHUB_REPO: ${{ vars.RELEASE_GITHUB_REPO || github.event.repository.name }}
+      GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify version and release destination
+        run: npm run release:verify
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build application
+        run: npm run build
+
+      - name: Build installer and publish GitHub Release
+        run: npm run desktop:publish

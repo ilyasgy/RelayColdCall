@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+*.tsbuildinfo
+.vite/
+.codex-import-qa.csv
+electron-builder.env
+dev-app-update.yml
+.env
+.env.*
+!.env.example
+.desktop-smoke-profile/
