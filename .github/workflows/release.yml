@@ -41,5 +41,43 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Build installer and publish GitHub Release
-        run: npm run desktop:publish
+      - name: Build Windows installer
+        run: npm run desktop:dist
+
+      - name: Publish and verify GitHub Release
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $installer = "release/Relay-Setup-$version-x64.exe"
+          $artifacts = @(
+            $installer
+            "$installer.blockmap"
+            "release/latest.yml"
+          )
+
+          foreach ($artifact in $artifacts) {
+            if (-not (Test-Path -LiteralPath $artifact)) {
+              throw "Required release artifact is missing: $artifact"
+            }
+          }
+
+          $repository = "$env:RELEASE_GITHUB_OWNER/$env:RELEASE_GITHUB_REPO"
+          gh release view $env:RELEASE_TAG --repo $repository *> $null
+
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @artifacts --repo $repository --clobber
+          } else {
+            gh release create $env:RELEASE_TAG @artifacts --repo $repository --title $version --generate-notes --latest
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub release upload failed for $env:RELEASE_TAG."
+          }
+
+          $uploadedAssets = @(gh release view $env:RELEASE_TAG --repo $repository --json assets --jq '.assets[].name')
+          foreach ($artifact in $artifacts) {
+            $assetName = Split-Path -Leaf $artifact
+            if ($uploadedAssets -notcontains $assetName) {
+              throw "GitHub release is incomplete; missing uploaded asset: $assetName"
+            }
+          }

@@ -1,7 +1,7 @@
 {
   "name": "relay-cold-call-crm",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A focused cold-call lead operations CRM.",
   "author": "Relay",
   "main": "electron/main.cjs",
@@ -16,7 +16,6 @@
     "desktop:launch": "wait-on http://127.0.0.1:4183 && electron . --dev",
     "desktop:pack": "npm run build && electron-builder --config electron-builder.config.cjs --dir --publish never",
     "desktop:dist": "npm run release:verify && npm run build && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never",
-    "desktop:publish": "npm run release:verify && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish always",
     "release:verify": "node scripts/verify-release.mjs"
   },
   "dependencies": {

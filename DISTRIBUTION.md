@@ -25,8 +25,8 @@ git commit -m "Initial Relay desktop release"
 git branch -M main
 git remote add origin https://github.com/YOUR_ACCOUNT/YOUR_REPOSITORY.git
 git push -u origin main
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 The tag must exactly match `v` plus the version in `package.json`.
@@ -57,10 +57,10 @@ The workflow passes them only to the build job. Leave them absent until a certif
 ## Initial release for the friend
 
 1. Complete one of the GitHub setups above.
-2. Push tag `v1.0.1` while `package.json` says `1.0.1`.
+2. Push tag `v1.0.2` while `package.json` says `1.0.2`.
 3. Open the GitHub repository's **Actions** tab and wait for **Build and publish Windows release** to succeed.
-4. Open **Releases → v1.0.1**.
-5. Download `Relay-Setup-1.0.1-x64.exe` and send that single file to the friend.
+4. Open **Releases → v1.0.2**.
+5. Download `Relay-Setup-1.0.2-x64.exe` and send that single file to the friend.
 6. Keep `latest.yml` and the `.blockmap` attached to the GitHub Release; the updater uses them, but the friend does not open them.
 
 The friend runs the installer, accepts the per-user installation, and launches **Relay Lead Operations** from the desktop or Start menu.
@@ -75,8 +75,8 @@ npm version patch
 
 Examples:
 
-- `1.0.1` → `1.0.2` for a bug fix.
-- `1.0.1` → `1.1.0` with `npm version minor` for a backward-compatible feature.
+- `1.0.2` → `1.0.3` for a bug fix.
+- `1.0.2` → `1.1.0` with `npm version minor` for a backward-compatible feature.
 - `1.1.0` → `2.0.0` with `npm version major` for a breaking product/data-contract change.
 
 `npm version` updates `package.json` and `package-lock.json`, creates a version commit, and creates the matching `v<version>` Git tag. Publish it with:
