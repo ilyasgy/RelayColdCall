@@ -14,7 +14,6 @@ const publish = releaseOwner && releaseRepo
 module.exports = {
   appId: "com.relay.leadoperations",
   productName: "Relay Lead Operations",
-  electronDist: "node_modules/electron/dist",
   asar: true,
   compression: "maximum",
   directories: {
