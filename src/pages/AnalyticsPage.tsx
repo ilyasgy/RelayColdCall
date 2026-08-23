@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
-import { Badge, Button, MetricCard, PageHeader } from "../components/UI";
+import { Badge, Button, EmptyState, MetricCard, PageHeader } from "../components/UI";
 import { useCRM } from "../data/store";
 import { computeAnalytics } from "../domain/engine";
 import { downloadExport } from "../domain/files";
@@ -27,6 +27,13 @@ export function AnalyticsPage() {
   ];
   const funnelMax = Math.max(1, funnel[0].value);
   const lostRows = Object.entries(state.leads.filter((lead) => lead.status === "lost" && (batch === "all" || lead.batchId === batch)).reduce<Record<string, number>>((acc, lead) => { const reason = lead.lostReason || "Not recorded"; acc[reason] = (acc[reason] ?? 0) + 1; return acc; }, {})).sort((a, b) => b[1] - a[1]);
+
+  if (!state.callAttempts.some((attempt) => !attempt.voidedAt) && !state.meetings.some((meeting) => !meeting.voidedAt)) {
+    return <>
+      <PageHeader eyebrow="Evidence from stored activity" title="Analytics" description="All rates are recalculated from stored call attempts, meetings, and outcomes — never manually entered totals." />
+      <section className="panel analytics-empty"><EmptyState icon={<Icon name="analytics" size={26} />} title="No calling activity yet" description="Analytics will appear automatically after you begin recording calls and meetings. Nothing needs to be entered twice." /></section>
+    </>;
+  }
 
   return <>
     <PageHeader eyebrow="Evidence from stored activity" title="Analytics" description="All rates are recalculated from immutable call attempts, meetings, and outcomes — never manually entered totals." actions={<Button variant="secondary" onClick={() => void downloadExport({ kind: "analytics", format: "xlsx", state, analytics }).then((fileName) => notify(`${fileName} downloaded`, "success")).catch(() => notify("Analytics export failed", "danger"))} startIcon={<Icon name="download" size={16} />}>Export analytics</Button>} />

@@ -64,7 +64,7 @@ export function LeadsPage({ initialSearch = "", onImport }: LeadsPageProps) {
           </div>
           {activeFilters || query ? <Button variant="ghost" size="sm" onClick={clearFilters} startIcon={<Icon name="close" size={14} />}>Clear {activeFilters ? `${activeFilters} filters` : "search"}</Button> : null}
         </div>
-        {leads.length ? <LeadTable leads={leads} onOpen={setDrawerLeadId} /> : <EmptyState icon={<Icon name="search" size={25} />} title="No leads match" description="Clear a filter or search for a different clinic, person, phone, or email." action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} />}
+        {leads.length ? <LeadTable leads={leads} onOpen={setDrawerLeadId} /> : state.leads.length ? <EmptyState icon={<Icon name="search" size={25} />} title="No leads match" description="Clear a filter or search for a different clinic, person, phone, or email." action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} /> : <EmptyState icon={<Icon name="leads" size={25} />} title="No leads yet" description="Import your first CSV or XLSX lead list to build the calling queue." action={<Button variant="primary" onClick={onImport}>Import lead list</Button>} />}
       </section>
       <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
     </>

@@ -48,21 +48,24 @@ export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
           </div>
 
           <div className="drawer__tabs" role="tablist">
-            {(["overview", "activity", "opportunity", "research"] as const).map((item) => <button key={item} className={tab === item ? "is-active" : ""} onClick={() => setTab(item)} role="tab" aria-selected={tab === item}>{item}</button>)}
+            {(["overview", "opportunity", "research", "activity"] as const).map((item) => <button key={item} className={tab === item ? "is-active" : ""} onClick={() => setTab(item)} role="tab" aria-selected={tab === item}>{item === "overview" ? "Details" : item === "opportunity" ? "Scheduling" : item === "research" ? "Research" : "History"}</button>)}
           </div>
 
           <div className="drawer__body">
             {tab === "overview" ? <>
+              <div className="detail-stack">
               <div className="detail-actions"><Button variant="primary" size="sm" onClick={() => setEditing(true)} startIcon={<Icon name="edit" size={15} />}>Edit lead</Button>{terminalDormant ? <Button variant="secondary" size="sm" onClick={() => commit("Lead reopened", (current) => reopenLead(current, lead.id), "Lead reopened and queued")} startIcon={<Icon name="recycle" size={15} />}>Reopen lead</Button> : null}</div>
               <section className="detail-section"><h3>Contact</h3><div className="detail-grid"><div><small>Decision maker</small><strong>{lead.decisionMakerName || "—"}</strong></div><div><small>Role</small><strong>{lead.decisionMakerRole || CONTACT_TYPE_LABELS[lead.contactType]}</strong></div><div><small>Direct phone</small><a href={phoneHref(lead.directPhone)}>{lead.directPhone || "—"}</a></div><div><small>Mobile</small><a href={phoneHref(lead.mobilePhone)}>{lead.mobilePhone || "—"}</a></div><div><small>Email</small><a href={lead.email ? `mailto:${lead.email}` : undefined}>{lead.email || "—"}</a></div><div><small>Local time</small><strong>{formatLocalTime(lead.timeZone)}</strong></div></div></section>
               <section className="detail-section"><h3>Business</h3><div className="detail-grid"><div><small>Website</small><a href={lead.websiteUrl} target="_blank" rel="noreferrer">{lead.websiteDomain || "—"} <Icon name="externalLink" size={12} /></a></div><div><small>Location</small><strong>{lead.city}, {lead.state}</strong></div><div><small>Specialty</small><strong>{lead.specialty || "—"}</strong></div><div><small>Practice size</small><strong>{lead.practiceSize || "—"}</strong></div><div><small>Batch</small><strong>{batch?.name || "Direct entry"}</strong></div><div><small>Assigned caller</small><strong>{lead.assignedCaller || "Operator"}</strong></div></div></section>
-              <section className="detail-section"><h3>Journey counters</h3><div className="counter-pair counter-pair--drawer"><div><span>Cold call attempts</span><strong>{lead.coldAttemptCount} <small>/ {state.settings.calling.maximumLifetimeAttempts}</small></strong></div><div className={lead.pipelineStage === "post_meeting" ? "is-active" : ""}><span>Post-meeting touches</span><strong>{lead.postMeetingTouchCount} <small>/ {state.settings.followUp.maximumPostMeetingTouches}</small></strong></div></div></section>
+              <section className="detail-section"><h3>Calling</h3><div className="counter-pair counter-pair--drawer"><div><span>Cold call attempts</span><strong>{lead.coldAttemptCount} <small>/ {state.settings.calling.maximumLifetimeAttempts}</small></strong></div><div className={lead.pipelineStage === "post_meeting" ? "is-active" : ""}><span>Post-meeting touches</span><strong>{lead.postMeetingTouchCount} <small>/ {state.settings.followUp.maximumPostMeetingTouches}</small></strong></div></div></section>
               <section className="detail-section"><h3>Add note</h3><div className="inline-note"><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add an append-only note…" rows={3} /><Button variant="secondary" disabled={!note.trim()} onClick={() => { commit("Note added", (current) => addNote(current, lead.id, note.trim()), "Note saved"); setNote(""); }}>Add note</Button></div></section>
+              </div>
             </> : null}
 
-            {tab === "activity" ? <section className="detail-section"><div className="section-heading"><h3>Complete activity history</h3><Badge>{activities.length} events</Badge></div><div className="timeline timeline--full">{activities.map((activity) => <div className="timeline__item" key={activity.id}><i /><div><time>{formatDateTime(activity.occurredAt)}</time><strong>{activity.title}</strong>{activity.note ? <p>{activity.note}</p> : null}</div></div>)}</div></section> : null}
+            {tab === "activity" ? <section className="detail-section"><div className="section-heading"><h3>Complete history</h3><Badge>{activities.length} events</Badge></div><div className="timeline timeline--full">{activities.map((activity) => <div className="timeline__item" key={activity.id}><i /><div><time>{formatDateTime(activity.occurredAt)}</time><strong>{activity.title}</strong>{activity.note ? <p>{activity.note}</p> : null}</div></div>)}</div></section> : null}
 
             {tab === "opportunity" ? <>
+              <section className="detail-section"><div className="section-heading"><h3>Scheduling</h3><Badge tone={lead.nextAction ? "accent" : "neutral"}>{lead.nextAction ? "Active" : "No action"}</Badge></div><div className="detail-grid"><div><small>Next action</small><strong>{lead.nextAction?.reason || "No future action"}</strong></div><div><small>Due</small><strong>{lead.nextAction ? formatDateTime(lead.nextAction.dueAt) : "History retained"}</strong></div><div><small>Exact callback</small><strong>{lead.callbackAt ? formatDateTime(lead.callbackAt) : "Not scheduled"}</strong></div><div><small>Follow-up</small><strong>{lead.followUpAt ? formatDateTime(lead.followUpAt) : "Not scheduled"}</strong></div></div></section>
               <section className="detail-section"><div className="section-heading"><h3>Meetings</h3><Badge tone="info">{meetings.length}</Badge></div>{meetings.length ? meetings.map((meeting) => <div className="detail-record" key={meeting.id}><span><Icon name="calendar" size={17} /></span><div><strong>{formatDateTime(meeting.scheduledAt)} · {meeting.meetingType}</strong><small>{meeting.status}{meeting.outcome ? ` · ${meeting.outcome.replaceAll("_", " ")}` : ""}</small>{meeting.notes ? <p>{meeting.notes}</p> : null}</div></div>) : <p className="muted">No meetings recorded.</p>}</section>
               <section className="detail-section"><div className="section-heading"><h3>Post-meeting touches</h3><Badge tone="purple">{lead.postMeetingTouchCount} / {state.settings.followUp.maximumPostMeetingTouches}</Badge></div>{touches.length ? touches.map((touch) => <div className="detail-record" key={touch.id}><span><Icon name={touch.type === "email" ? "mail" : "phone"} size={17} /></span><div><strong>Touch {touch.touchNumber} — {touch.type}</strong><small>{formatDateTime(touch.occurredAt)} · {touch.outcome.replaceAll("_", " ")}</small>{touch.note ? <p>{touch.note}</p> : null}</div></div>) : <p className="muted">No post-meeting touches recorded.</p>}</section>
             </> : null}
@@ -94,5 +97,47 @@ function EditLeadModal({ leadId, onClose }: { leadId: string | null; onClose: ()
     commit("Lead updated", (current) => updateLead(current, lead.id, { ...form, contactType: form.contactType as ContactType, priority: form.priority as LeadPriority, pixelPresent: form.pixelPresent as PixelPresence, findingStrength: form.findingStrength as FindingStrength }), "Lead changes autosaved");
     onClose();
   };
-  return <Modal open onClose={onClose} title="Edit lead" description="Changes update the operational record immediately." size="lg" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={save}>Save changes</Button></>}><div className="form-grid"><label className="field"><span>Clinic name</span><input {...field("clinicName")} /></label><label className="field"><span>Website</span><input {...field("websiteUrl")} /></label><label className="field"><span>Decision maker</span><input {...field("decisionMakerName")} /></label><label className="field"><span>Role</span><input {...field("decisionMakerRole")} /></label><label className="field"><span>Contact class</span><select {...field("contactType")}>{Object.entries(CONTACT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Direct phone</span><input {...field("directPhone")} /></label><label className="field"><span>Mobile phone</span><input {...field("mobilePhone")} /></label><label className="field"><span>Email</span><input type="email" {...field("email")} /></label><label className="field"><span>City</span><input {...field("city")} /></label><label className="field"><span>State</span><input {...field("state")} /></label><label className="field"><span>Time zone</span><input {...field("timeZone")} /></label><label className="field"><span>Priority</span><select {...field("priority")}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Pixel</span><select {...field("pixelPresent")}><option value="yes">Yes</option><option value="no">No</option><option value="unknown">Unknown</option></select></label><label className="field"><span>Finding strength</span><select {...field("findingStrength")}><option value="A">A — Strong</option><option value="B">B — Good</option><option value="C">C — Fallback</option><option value="unknown">Unknown</option></select></label><label className="field field--full"><span>Primary finding</span><input {...field("primaryFinding")} /></label><label className="field field--full"><span>Evidence</span><textarea rows={3} {...field("evidenceNotes")} /></label><label className="field field--full"><span>Pitch notes</span><textarea rows={3} {...field("pitchNotes")} /></label></div></Modal>;
+  return (
+    <Modal open onClose={onClose} title="Edit lead" description="Changes update the operational record immediately." size="lg" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={save}>Save changes</Button></>}>
+      <div className="form-stack">
+        <section className="form-section">
+          <div className="section-heading"><h3>Business</h3></div>
+          <div className="form-grid">
+            <label className="field"><span>Clinic name</span><input {...field("clinicName")} /></label>
+            <label className="field"><span>Website</span><input {...field("websiteUrl")} /></label>
+            <label className="field"><span>Specialty</span><input {...field("specialty")} /></label>
+            <label className="field"><span>Practice size</span><input {...field("practiceSize")} /></label>
+            <label className="field"><span>City</span><input {...field("city")} /></label>
+            <label className="field"><span>State</span><input {...field("state")} /></label>
+            <label className="field"><span>Time zone</span><input {...field("timeZone")} /></label>
+            <label className="field"><span>Priority</span><select {...field("priority")}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          </div>
+        </section>
+        <section className="form-section">
+          <div className="section-heading"><h3>Contact</h3></div>
+          <div className="form-grid">
+            <label className="field"><span>Decision maker</span><input {...field("decisionMakerName")} /></label>
+            <label className="field"><span>Role</span><input {...field("decisionMakerRole")} /></label>
+            <label className="field"><span>Contact class</span><select {...field("contactType")}>{Object.entries(CONTACT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="field"><span>Direct phone</span><input {...field("directPhone")} /></label>
+            <label className="field"><span>Extension</span><input {...field("extension")} /></label>
+            <label className="field"><span>Mobile phone</span><input {...field("mobilePhone")} /></label>
+            <label className="field field--full"><span>Email</span><input type="email" {...field("email")} /></label>
+          </div>
+        </section>
+        <section className="form-section">
+          <div className="section-heading"><h3>Technical research</h3></div>
+          <div className="form-grid">
+            <label className="field"><span>Pixel</span><select {...field("pixelPresent")}><option value="yes">Yes</option><option value="no">No</option><option value="unknown">Unknown</option></select></label>
+            <label className="field"><span>Finding strength</span><select {...field("findingStrength")}><option value="A">A — Strong</option><option value="B">B — Good</option><option value="C">C — Fallback</option><option value="unknown">Unknown</option></select></label>
+            <label className="field"><span>Finding category</span><input {...field("findingCategory")} /></label>
+            <label className="field"><span>Security grade</span><input {...field("securityGrade")} /></label>
+            <label className="field field--full"><span>Primary finding</span><input {...field("primaryFinding")} /></label>
+            <label className="field field--full"><span>Evidence</span><textarea rows={3} {...field("evidenceNotes")} /></label>
+            <label className="field field--full"><span>Pitch notes</span><textarea rows={3} {...field("pitchNotes")} /></label>
+          </div>
+        </section>
+      </div>
+    </Modal>
+  );
 }

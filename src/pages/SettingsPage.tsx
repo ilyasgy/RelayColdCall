@@ -4,7 +4,7 @@ import { Badge, Button, Modal, PageHeader, cx } from "../components/UI";
 import { createEmptyState } from "../data/defaults";
 import { useCRM } from "../data/store";
 import { useAppUpdates } from "../desktop/updates";
-import { computeAnalytics, createSampleState } from "../domain/engine";
+import { computeAnalytics } from "../domain/engine";
 import {
   EXPORT_CHOICES,
   downloadBackup,
@@ -26,7 +26,7 @@ const SETTINGS_TABS = [
 ] as const;
 
 type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
-type ResetTarget = "sample" | "empty";
+type ResetTarget = "empty";
 
 const QUEUE_LABELS: Record<QueueClass, string> = {
   exact_callback: "Exact scheduled callback",
@@ -206,10 +206,10 @@ export function SettingsPage() {
 
   const confirmReset = () => {
     if (!resetTarget || !resetAcknowledged) return;
-    const next = resetTarget === "sample" ? createSampleState() : createEmptyState();
+    const next = createEmptyState();
     setDraft(cloneSettings(next.settings));
     setEditing(false);
-    replaceState(next, resetTarget === "sample" ? "Sample workspace restored" : "Workspace reset to empty");
+    replaceState(next, "Workspace reset to empty");
     setResetTarget(null);
     setResetAcknowledged(false);
   };
@@ -280,10 +280,10 @@ export function SettingsPage() {
       <Modal
         open={resetTarget !== null}
         onClose={() => setResetTarget(null)}
-        title={resetTarget === "sample" ? "Restore sample workspace?" : "Reset to an empty workspace?"}
+        title="Reset to an empty workspace?"
         description="This replaces every lead, call attempt, meeting, follow-up, batch, and setting currently stored. Download a backup first if you may need this data."
         size="sm"
-        footer={<><Button variant="ghost" onClick={() => setResetTarget(null)}>Cancel</Button><Button variant="danger" disabled={!resetAcknowledged} onClick={confirmReset}>{resetTarget === "sample" ? "Replace with sample data" : "Delete workspace data"}</Button></>}
+        footer={<><Button variant="ghost" onClick={() => setResetTarget(null)}>Cancel</Button><Button variant="danger" disabled={!resetAcknowledged} onClick={confirmReset}>Delete workspace data</Button></>}
       >
         <label className="check-row">
           <input type="checkbox" checked={resetAcknowledged} onChange={(event) => setResetAcknowledged(event.target.checked)} />
@@ -474,7 +474,6 @@ function DataSettingsPanel({ state, settings, sourceLabel, persisted, supported,
       </SettingsSection>
 
       <SettingsSection title="Danger zone" description="These controls replace the full persisted workspace and always require explicit confirmation.">
-        <SettingsRow title="Restore sample workspace" description="Replace current data with a complete tested example journey."><Button variant="secondary" size="sm" onClick={() => onReset("sample")}>Use sample data</Button></SettingsRow>
         <SettingsRow title="Reset to empty" description="Remove all operational data and begin with default settings."><Button variant="danger" size="sm" onClick={() => onReset("empty")} startIcon={<Icon name="trash" size={14} />}>Reset workspace</Button></SettingsRow>
       </SettingsSection>
     </>

@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { Activity, CRMState, PersistenceStatus } from "../types";
-import { createSampleState } from "../domain/engine";
+import { createEmptyState } from "./defaults";
 import { loadState, requestPersistentStorage, saveState } from "./db";
 
 type StateRecipe = (state: CRMState) => CRMState;
@@ -62,7 +62,7 @@ function undoActivity(state: CRMState, label: string): CRMState {
 }
 
 export function CRMProvider({ children }: PropsWithChildren) {
-  const [state, setState] = useState<CRMState>(() => createSampleState());
+  const [state, setState] = useState<CRMState>(() => createEmptyState());
   const [ready, setReady] = useState(false);
   const [persistence, setPersistence] = useState<PersistenceStatus>({
     supported: typeof indexedDB !== "undefined",

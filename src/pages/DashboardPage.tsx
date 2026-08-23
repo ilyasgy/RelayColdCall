@@ -3,7 +3,7 @@ import { useCRM } from "../data/store";
 import { computeAnalytics, getQueue, startSession } from "../domain/engine";
 import type { CRMState } from "../types";
 import { Icon } from "../components/Icon";
-import { Badge, Button, MetricCard, PageHeader, Progress } from "../components/UI";
+import { Badge, Button, EmptyState, MetricCard, PageHeader, Progress } from "../components/UI";
 import { STATUS_LABELS, STATUS_TONES, type Route } from "../lib/constants";
 import { formatDateTime, formatNumber, formatPercent } from "../lib/format";
 
@@ -70,6 +70,32 @@ export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps
     if (!activeSession) commit("Session started", (current) => startSession(current), "Calling session started");
     onStartCalling();
   };
+
+  if (!state.leads.length) {
+    return (
+      <>
+        <PageHeader
+          eyebrow={`${operationsDay} operations`}
+          title={`${greeting}, Operator`}
+          description="Relay is ready for your first lead list. Import leads once, then let the queue organize every next action."
+          actions={<Button variant="primary" size="lg" onClick={() => onNavigate("import")} startIcon={<Icon name="plus" size={17} />}>Import your first leads</Button>}
+        />
+        <section className="panel dashboard-empty-state">
+          <EmptyState
+            icon={<Icon name="leads" size={28} />}
+            title="No leads yet"
+            description="Import a CSV or XLSX file to create your workspace. Your data stays on this computer and Relay will build the calling queue automatically."
+            action={<><Button variant="primary" onClick={() => onNavigate("import")}>Import lead list</Button><Button variant="secondary" onClick={() => onNavigate("settings")}>Review settings</Button></>}
+          />
+          <div className="empty-onboarding-grid" aria-label="Getting started">
+            <div><span>1</span><strong>Import</strong><small>Add your prepared lead list.</small></div>
+            <div><span>2</span><strong>Review</strong><small>Confirm calling hours and retry rules.</small></div>
+            <div><span>3</span><strong>Start calling</strong><small>Relay serves the next best lead.</small></div>
+          </div>
+        </section>
+      </>
+    );
+  }
 
   return (
     <>

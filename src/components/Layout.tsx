@@ -52,7 +52,7 @@ export function Layout({ route, onNavigate, onStartCalling, onSearch, children }
   return (
     <div className="app-shell">
       <aside className={cn("sidebar", mobileOpen && "sidebar--open")} aria-label="Primary navigation">
-        <div className="brand" onClick={() => navigate("dashboard")} role="button" tabIndex={0}>
+        <div className="brand" onClick={() => navigate("dashboard")} role="button" tabIndex={0} aria-label="Relay dashboard">
           <span className="brand__mark"><Icon name="zap" size={20} /></span>
           <span className="brand__copy"><strong>Relay</strong><small>Lead operations</small></span>
         </div>
@@ -69,6 +69,7 @@ export function Layout({ route, onNavigate, onStartCalling, onSearch, children }
                     className={cn("nav-item", route === item.route && "nav-item--active")}
                     onClick={() => navigate(item.route)}
                     aria-current={route === item.route ? "page" : undefined}
+                    aria-label={item.label}
                   >
                     <Icon name={item.icon} size={18} />
                     <span>{item.label}</span>
