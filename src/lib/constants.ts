@@ -21,6 +21,10 @@ export const STATUS_LABELS: Record<WorkflowStatus, string> = {
   post_meeting_follow_up: "Post-meeting follow-up",
   contact_data_required: "Contact data required",
   research_required: "Research required",
+  not_interested: "Not interested",
+  wrong_number: "Wrong number",
+  disqualified: "Disqualified",
+  archived: "Archived",
   won: "Won / Client",
   lost: "Lost / Closed",
   do_not_call: "Do not call",
@@ -43,6 +47,10 @@ export const STATUS_TONES: Record<WorkflowStatus, string> = {
   post_meeting_follow_up: "purple",
   contact_data_required: "danger",
   research_required: "warning",
+  not_interested: "muted",
+  wrong_number: "danger",
+  disqualified: "muted",
+  archived: "muted",
   won: "success",
   lost: "muted",
   do_not_call: "danger",
@@ -103,15 +111,10 @@ export const POST_MEETING_OUTCOME_LABELS: Record<PostMeetingOutcomeKind, string>
 
 export const ROUTES = [
   "dashboard",
-  "queue",
   "leads",
-  "callbacks",
   "meetings",
   "follow-ups",
-  "recycle",
-  "won",
-  "lost",
-  "analytics",
+  "finished",
   "import",
   "settings",
 ] as const;
@@ -122,18 +125,10 @@ export const NAV_ITEMS: Array<{
   route: Route;
   label: string;
   icon: string;
-  group: "work" | "data" | "insights" | "system";
 }> = [
-  { route: "dashboard", label: "Dashboard", icon: "dashboard", group: "work" },
-  { route: "queue", label: "Call Queue", icon: "phone", group: "work" },
-  { route: "callbacks", label: "Callbacks", icon: "callback", group: "work" },
-  { route: "meetings", label: "Meetings", icon: "calendar", group: "work" },
-  { route: "follow-ups", label: "Follow-Ups", icon: "followup", group: "work" },
-  { route: "leads", label: "All Leads", icon: "leads", group: "data" },
-  { route: "recycle", label: "Recycle", icon: "recycle", group: "data" },
-  { route: "won", label: "Won Clients", icon: "won", group: "data" },
-  { route: "lost", label: "Lost / Closed", icon: "lost", group: "data" },
-  { route: "import", label: "Import", icon: "import", group: "data" },
-  { route: "analytics", label: "Analytics", icon: "analytics", group: "insights" },
-  { route: "settings", label: "Settings", icon: "settings", group: "system" },
+  { route: "dashboard", label: "Today", icon: "dashboard" },
+  { route: "leads", label: "Leads", icon: "leads" },
+  { route: "meetings", label: "Meetings", icon: "calendar" },
+  { route: "follow-ups", label: "Follow-Ups", icon: "followUp" },
+  { route: "finished", label: "Finished", icon: "checkCircle" },
 ];

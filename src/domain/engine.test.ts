@@ -133,7 +133,7 @@ describe("imports and invariants", () => {
 });
 
 describe("cold-call transitions", () => {
-  it("retries, recycles, extends, and finally moves an unreachable lead to dormant", () => {
+  it("retries twice and finishes an unreachable lead after the third unanswered attempt", () => {
     const initial = imported();
     const leadId = initial.leads[0].id;
     let state = initial;
@@ -149,17 +149,11 @@ describe("cold-call transitions", () => {
     state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, DAY));
     expect(state.leads[0].status).toBe("retry_scheduled");
     state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, 2 * DAY));
-    expect(state.leads[0]).toMatchObject({ status: "recycle_later", recycleCycle: 1 });
-    expect(state.leads[0].nextAction?.type).toBe("recycled_call");
-
-    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, 17 * DAY));
-    expect(state.leads[0]).toMatchObject({ status: "extended_retry", coldNoAnswerCount: 4 });
-    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, 18 * DAY));
     expect(state.leads[0]).toMatchObject({
       status: "dormant_unreachable",
       pipelineStage: "dormant",
-      coldAttemptCount: 5,
-      coldNoAnswerCount: 5,
+      coldAttemptCount: 3,
+      coldNoAnswerCount: 3,
       nextAction: null,
     });
     expect(() => assertInvariants(state)).not.toThrow();
@@ -186,15 +180,33 @@ describe("cold-call transitions", () => {
     expect(() => assertInvariants(state)).not.toThrow();
   });
 
-  it("switches to an alternate phone instead of losing the clinic", () => {
+  it("finishes a wrong-number lead while retaining its contact data and history", () => {
     let state = imported([leadInput("Alternate Clinic", { alternatePhones: ["917-555-0102"] })]);
     state = applyColdOutcome(state, state.leads[0].id, { outcome: "bad_number" }, NOW);
     expect(state.leads[0]).toMatchObject({
-      directPhone: "917-555-0102",
-      badNumber: false,
-      status: "new",
+      directPhone: "212-555-0100",
+      alternatePhones: ["917-555-0102"],
+      badNumber: true,
+      status: "wrong_number",
+      nextAction: null,
     });
-    expect(state.leads[0].nextAction?.queueEligible).toBe(true);
+    expect(state.callAttempts).toHaveLength(1);
+  });
+
+  it("records direct disqualified, won, and lost outcomes as terminal history", () => {
+    let state = imported([
+      leadInput("Disqualified Clinic"),
+      leadInput("Won Clinic", { directPhone: "2125550101" }),
+      leadInput("Lost Clinic", { directPhone: "2125550102" }),
+    ]);
+    state = applyColdOutcome(state, state.leads[0].id, { outcome: "disqualified", lostReason: "Outside target market" }, NOW);
+    state = applyColdOutcome(state, state.leads[1].id, { outcome: "won" }, NOW);
+    state = applyColdOutcome(state, state.leads[2].id, { outcome: "lost", lostReason: "No budget" }, NOW);
+
+    expect(state.leads.map((lead) => lead.status)).toEqual(["disqualified", "won", "lost"]);
+    expect(state.leads.every((lead) => lead.nextAction === null)).toBe(true);
+    expect(state.callAttempts).toHaveLength(3);
+    expect(() => assertInvariants(state)).not.toThrow();
   });
 });
 
@@ -230,8 +242,8 @@ describe("queue engine", () => {
     state = applyColdOutcome(state, retry.id, { outcome: "no_answer" }, shift(seed, 4 * DAY));
 
     expect(getQueue(state, NOW).map((candidate) => candidate.action.queueClass).slice(0, 5)).toEqual([
-      "exact_callback",
       "post_meeting_follow_up",
+      "exact_callback",
       "interested_follow_up",
       "cold_retry",
       "new_cold",

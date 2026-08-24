@@ -4,16 +4,13 @@ import { Layout } from "./components/Layout";
 import { Badge, Button, Modal, Toast, UndoBar } from "./components/UI";
 import { useCRM } from "./data/store";
 import { ROUTES, type Route } from "./lib/constants";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
-import { CallbacksPage } from "./pages/CallbacksPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { FinishedPage } from "./pages/FinishedPage";
 import { FocusMode } from "./pages/FocusMode";
 import { FollowUpsPage } from "./pages/FollowUpsPage";
 import { ImportPage } from "./pages/ImportPage";
-import { LeadCollectionPage } from "./pages/LeadCollectionPage";
 import { LeadsPage } from "./pages/LeadsPage";
 import { MeetingsPage } from "./pages/MeetingsPage";
-import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 type AppLocation = Route | "focus";
@@ -29,6 +26,8 @@ function parseHash(hash: string): AppLocation | null {
   }
   if (!value) return "dashboard";
   if (value === "focus" || value === "calling") return "focus";
+  if (["queue", "callbacks", "analytics"].includes(value)) return "dashboard";
+  if (["recycle", "won", "lost"].includes(value)) return "finished";
   return routeSet.has(value) ? value as Route : null;
 }
 
@@ -47,16 +46,11 @@ function isTypingTarget(target: EventTarget | null) {
 }
 
 const pageTitles: Record<AppLocation, string> = {
-  dashboard: "Dashboard",
-  queue: "Call Queue",
-  leads: "All Leads",
-  callbacks: "Callbacks",
+  dashboard: "Today",
+  leads: "Leads",
   meetings: "Meetings",
   "follow-ups": "Follow-Ups",
-  recycle: "Recycle",
-  won: "Won Clients",
-  lost: "Lost / Closed",
-  analytics: "Analytics",
+  finished: "Finished",
   import: "Import",
   settings: "Settings",
   focus: "Live Calling",
@@ -67,7 +61,7 @@ export function App() {
   const [location, setLocation] = useState<AppLocation>(initialLocation);
   const [leadSearch, setLeadSearch] = useState("");
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const lastPage = useRef<Route>(location === "focus" ? "queue" : location);
+  const lastPage = useRef<Route>(location === "focus" ? "dashboard" : location);
 
   const syncFromHash = useCallback(() => {
     const next = parseHash(window.location.hash);
@@ -235,24 +229,14 @@ function RoutePage({
   switch (route) {
     case "dashboard":
       return <DashboardPage onNavigate={navigate} onStartCalling={startCalling} />;
-    case "queue":
-      return <QueuePage onStartCalling={startCalling} />;
     case "leads":
       return <LeadsPage initialSearch={leadSearch} onImport={() => navigate("import")} />;
-    case "callbacks":
-      return <CallbacksPage onStartCalling={startCalling} />;
     case "meetings":
       return <MeetingsPage />;
     case "follow-ups":
       return <FollowUpsPage onStartCalling={startCalling} />;
-    case "recycle":
-      return <LeadCollectionPage kind="recycle" />;
-    case "won":
-      return <LeadCollectionPage kind="won" />;
-    case "lost":
-      return <LeadCollectionPage kind="lost" />;
-    case "analytics":
-      return <AnalyticsPage />;
+    case "finished":
+      return <FinishedPage />;
     case "import":
       return <ImportPage onViewLeads={() => navigate("leads")} />;
     case "settings":

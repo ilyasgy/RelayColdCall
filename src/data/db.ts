@@ -148,21 +148,72 @@ export function migrateState(raw: unknown): CRMState | null {
   const source = raw as Partial<CRMState>;
   const now = source.updatedAt ?? new Date().toISOString();
   const empty = createEmptyState(now);
+  const mergedSettings = mergeSettings(source.settings);
+  const settings: CRMSettings = {
+    ...mergedSettings,
+    calling: {
+      ...mergedSettings.calling,
+      maximumInitialAttempts: 3,
+      maximumLifetimeAttempts: 3,
+    },
+    queue: {
+      ...mergedSettings.queue,
+      classOrder: [
+        "post_meeting_follow_up",
+        "exact_callback",
+        "interested_follow_up",
+        "cold_retry",
+        "new_cold",
+        "recycled",
+      ],
+    },
+  };
+  const priorSchemaVersion = typeof source.schemaVersion === "number" ? source.schemaVersion : 1;
+  const leads = Array.isArray(source.leads)
+    ? source.leads.map((lead) => {
+        const migrated = {
+          ...lead,
+          customFields: lead.customFields && typeof lead.customFields === "object" ? lead.customFields : {},
+        };
+        if (
+          priorSchemaVersion < 2
+          && (migrated.status === "recycle_later" || migrated.status === "extended_retry")
+          && migrated.coldNoAnswerCount >= 3
+        ) {
+          return {
+            ...migrated,
+            status: "dormant_unreachable" as const,
+            pipelineStage: "dormant" as const,
+            nextAction: null,
+            updatedAt: now,
+          };
+        }
+        return migrated;
+      })
+    : [];
+  const postMeetingTouches = Array.isArray(source.postMeetingTouches)
+    ? source.postMeetingTouches.map((touch) => ({
+        ...touch,
+        dueAt: touch.dueAt ?? touch.occurredAt,
+        status: "completed" as const,
+        completedAt: touch.completedAt ?? touch.occurredAt,
+      }))
+    : [];
   return {
     ...empty,
     ...source,
     schemaVersion: CRM_SCHEMA_VERSION,
     revision: source.revision ?? 0,
     nextSequence: source.nextSequence ?? 1,
-    leads: Array.isArray(source.leads) ? source.leads : [],
+    leads,
     activities: Array.isArray(source.activities) ? source.activities : [],
     callAttempts: Array.isArray(source.callAttempts) ? source.callAttempts : [],
     meetings: Array.isArray(source.meetings) ? source.meetings : [],
-    postMeetingTouches: Array.isArray(source.postMeetingTouches) ? source.postMeetingTouches : [],
+    postMeetingTouches,
     sessions: Array.isArray(source.sessions) ? source.sessions : [],
     batches: Array.isArray(source.batches) ? source.batches : [],
     undoStack: Array.isArray(source.undoStack) ? source.undoStack : [],
-    settings: mergeSettings(source.settings),
+    settings,
     createdAt: source.createdAt ?? now,
     updatedAt: now,
   };

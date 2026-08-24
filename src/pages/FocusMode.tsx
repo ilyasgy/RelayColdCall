@@ -17,6 +17,7 @@ type ModalKind =
   | "callback"
   | "follow_up"
   | "meeting"
+  | "not_interested"
   | "lost"
   | "dnc"
   | "wrong_person"
@@ -146,13 +147,13 @@ export function FocusMode({ onExit }: FocusModeProps) {
         l: () => setModal("pm_lost"),
         d: () => setModal("pm_dnc"),
       } : {
-        n: () => coldOutcome("no_answer", {}, "No answer — retry scheduled"),
+        n: () => coldOutcome("no_answer", {}, lead.coldNoAnswerCount + 1 >= state.settings.calling.maximumInitialAttempts ? "No answer — moved to Finished" : "No answer — retry scheduled"),
         c: () => setModal("callback"),
         m: () => setModal("meeting"),
         i: () => setModal("follow_up"),
         f: () => setModal("follow_up"),
-        l: () => setModal("lost"),
-        b: () => coldOutcome("bad_number", {}, "Bad number recorded"),
+        l: () => setModal("not_interested"),
+        b: () => coldOutcome("bad_number", {}, "Wrong number — moved to Finished"),
         w: () => setModal("wrong_person"),
         d: () => setModal("dnc"),
       };
@@ -189,7 +190,7 @@ export function FocusMode({ onExit }: FocusModeProps) {
   }
 
   const phone = lead.badNumber && lead.mobilePhone ? lead.mobilePhone : lead.directPhone || lead.mobilePhone;
-  const maxColdAttempts = lead.coldAttemptCount >= state.settings.calling.maximumInitialAttempts ? state.settings.calling.maximumLifetimeAttempts : state.settings.calling.maximumInitialAttempts;
+  const maxColdAttempts = state.settings.calling.maximumInitialAttempts;
 
   return (
     <div className="focus-shell">
@@ -257,12 +258,15 @@ export function FocusMode({ onExit }: FocusModeProps) {
           <OutcomeDock
             postMeeting={isPostMeeting}
             onCold={(outcome) => {
-              if (outcome === "no_answer") coldOutcome(outcome, {}, "No answer — retry scheduled");
-              else if (outcome === "bad_number") coldOutcome(outcome, {}, "Bad number recorded");
+              if (outcome === "no_answer") coldOutcome(outcome, {}, lead.coldNoAnswerCount + 1 >= state.settings.calling.maximumInitialAttempts ? "No answer — moved to Finished" : "No answer — retry scheduled");
+              else if (outcome === "bad_number") coldOutcome(outcome, {}, "Wrong number — moved to Finished");
               else if (outcome === "callback") setModal("callback");
               else if (outcome === "meeting_booked") setModal("meeting");
               else if (outcome === "interested" || outcome === "follow_up") setModal("follow_up");
-              else if (outcome === "not_interested") setModal("lost");
+              else if (outcome === "not_interested") setModal("not_interested");
+              else if (outcome === "disqualified") coldOutcome("disqualified", {}, "Disqualified — moved to Finished");
+              else if (outcome === "won") coldOutcome("won", {}, "Lead marked won");
+              else if (outcome === "lost") setModal("lost");
               else if (outcome === "wrong_person") setModal("wrong_person");
               else if (outcome === "do_not_call") setModal("dnc");
               else setModal("other");
@@ -316,7 +320,8 @@ export function FocusMode({ onExit }: FocusModeProps) {
           if (modal === "callback") coldOutcome("callback", { callbackAt: iso }, "Callback scheduled");
           if (modal === "follow_up") coldOutcome("interested", { followUpAt: iso }, "Interested follow-up scheduled");
           if (modal === "meeting") coldOutcome("meeting_booked", { meetingAt: iso, meetingType, contactEmail }, "Meeting booked");
-          if (modal === "lost") coldOutcome("not_interested", { lostReason }, "Lead moved to Lost");
+          if (modal === "not_interested") coldOutcome("not_interested", { lostReason }, "Lead moved to Finished");
+          if (modal === "lost") coldOutcome("lost", { lostReason }, "Lead moved to Lost");
           if (modal === "dnc") coldOutcome("do_not_call", {}, "Do Not Call protection enabled");
           if (modal === "wrong_person") coldOutcome("wrong_person", { replacementName, replacementRole, replacementPhone }, "Contact updated");
           if (modal === "other") coldOutcome("other", { nextActionAt: iso }, "Custom outcome saved");
@@ -340,9 +345,11 @@ function OutcomeDock({ postMeeting, onCold, onPostMeeting }: { postMeeting: bool
     { outcome: "interested", label: "Interested", key: "I", icon: "activity", tone: "purple" },
     { outcome: "meeting_booked", label: "Meeting booked", key: "M", icon: "calendar", tone: "success" },
     { outcome: "not_interested", label: "Not interested", key: "L", icon: "lost" },
-    { outcome: "wrong_person", label: "Wrong person", key: "W", icon: "user" },
-    { outcome: "bad_number", label: "Bad number", key: "B", icon: "badNumber" },
-    { outcome: "do_not_call", label: "Do not call", key: "D", icon: "lock", tone: "danger" },
+    { outcome: "bad_number", label: "Wrong number", key: "B", icon: "badNumber" },
+    { outcome: "disqualified", label: "Disqualified", icon: "close" },
+    { outcome: "won", label: "Won", icon: "won", tone: "success" },
+    { outcome: "lost", label: "Lost", icon: "lost" },
+    { outcome: "do_not_call", label: "Do not contact", key: "D", icon: "lock", tone: "danger" },
     { outcome: "other", label: "Other", icon: "more" },
   ];
   const warm: Array<{ outcome: PostMeetingOutcomeKind; label: string; key?: string; icon: string; tone?: string }> = [
@@ -390,7 +397,7 @@ function OutcomeModal(props: OutcomeModalProps) {
   const { kind } = props;
   if (!kind) return null;
   const isDnc = kind === "dnc" || kind === "pm_dnc";
-  const isLost = kind === "lost" || kind === "pm_lost";
+  const isLost = kind === "lost" || kind === "not_interested" || kind === "pm_lost";
   const isMeeting = kind === "meeting" || kind === "pm_second_meeting";
   const isWrong = kind === "wrong_person";
   const isApproval = kind === "pm_approval";
@@ -399,7 +406,8 @@ function OutcomeModal(props: OutcomeModalProps) {
     callback: "Schedule exact callback",
     follow_up: "Schedule interested follow-up",
     meeting: "Book the meeting",
-    lost: "Close as not interested",
+    not_interested: "Finish as not interested",
+    lost: "Mark lead lost",
     dnc: "Enable Do Not Call protection?",
     wrong_person: "Update the decision maker",
     other: "Record another outcome",

@@ -395,6 +395,7 @@ export interface ParsedLeadImport {
 
 export interface ParseLeadImportOptions extends RowToLeadDraftOptions {
   mapping?: HeaderMapping;
+  customColumns?: Record<number, string>;
 }
 
 export function tableToLeadDrafts(
@@ -408,7 +409,10 @@ export function tableToLeadDrafts(
   const headers = [...table[0]].map((header) => header.trim());
   const inferred = autoMapHeaders(headers);
   const mapping = { ...inferred, ...options.mapping };
-  const claimedColumns = new Set(Object.values(mapping).filter((value): value is number => value !== undefined));
+  const claimedColumns = new Set([
+    ...Object.values(mapping).filter((value): value is number => value !== undefined),
+    ...Object.keys(options.customColumns ?? {}).map(Number),
+  ]);
   const unmappedHeaders = headers.filter((header, index) => header && !claimedColumns.has(index));
   const rows = table.slice(1).map((row) => [...row]);
   const drafts: LeadImportInput[] = [];
@@ -427,7 +431,13 @@ export function tableToLeadDrafts(
       errors.push({ rowNumber, message: "Clinic Name is required." });
       return;
     }
-    drafts.push(draft);
+    const customFields = Object.entries(options.customColumns ?? {}).reduce<Record<string, string>>((fields, [column, name]) => {
+      const value = row[Number(column)]?.trim();
+      const key = name.trim();
+      if (key && value) fields[key] = value;
+      return fields;
+    }, {});
+    drafts.push(Object.keys(customFields).length ? { ...draft, customFields } : draft);
   });
 
   return { headers, rows, mapping, drafts, errors, unmappedHeaders };
@@ -620,7 +630,7 @@ const LEAD_EXPORT_HEADERS = [
   "Security Grade", "Research Completed", "Status", "Pipeline Stage", "Priority", "Cold Attempts",
   "Cold No Answers", "Recycle Cycle", "Post-Meeting Touches", "First Called At", "Last Called At", "Last Outcome",
   "Last Conversation Notes", "Callback At", "Follow-Up At", "Next Action", "Next Action Due", "Lost Reason",
-  "Do Not Call", "Bad Number", "Imported At", "Batch ID", "Assigned Caller", "Updated At",
+  "Do Not Call", "Bad Number", "Imported At", "Batch ID", "Assigned Caller", "Custom Fields", "Updated At",
 ];
 
 function leadExportRow(lead: Lead): ExportCell[] {
@@ -634,7 +644,8 @@ function leadExportRow(lead: Lead): ExportCell[] {
     lead.coldAttemptCount, lead.coldNoAnswerCount, lead.recycleCycle, lead.postMeetingTouchCount,
     dateCell(lead.firstCalledAt), dateCell(lead.lastCalledAt), readableEnum(lead.lastOutcome), lead.lastConversationNotes,
     dateCell(lead.callbackAt), dateCell(lead.followUpAt), readableEnum(lead.nextAction?.type), dateCell(lead.nextAction?.dueAt ?? null),
-    lead.lostReason, lead.doNotCall, lead.badNumber, dateCell(lead.importedAt), lead.batchId, lead.assignedCaller, dateCell(lead.updatedAt),
+    lead.lostReason, lead.doNotCall, lead.badNumber, dateCell(lead.importedAt), lead.batchId, lead.assignedCaller,
+    Object.entries(lead.customFields ?? {}).map(([key, value]) => `${key}: ${value}`).join("; "), dateCell(lead.updatedAt),
   ];
 }
 
@@ -734,7 +745,7 @@ export function buildExportTable(kind: CRMExportKind, source: CRMExportSource): 
       return buildLeadExportTable(source.state.leads.filter((lead) => lead.status === "won"), "Won Clients");
     case "lost":
     case "lost-leads":
-      return buildLeadExportTable(source.state.leads.filter((lead) => lead.status === "lost"), "Lost Leads");
+      return buildLeadExportTable(source.state.leads.filter((lead) => ["lost", "not_interested", "disqualified"].includes(lead.status)), "Lost Leads");
     case "call-history":
       return buildCallHistoryExportTable(source.state.callAttempts, source.state.leads);
     case "analytics":

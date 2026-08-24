@@ -1,4 +1,4 @@
-export const CRM_SCHEMA_VERSION = 1 as const;
+export const CRM_SCHEMA_VERSION = 2 as const;
 
 export type ISODateTime = string;
 export type LeadPriority = "critical" | "high" | "normal" | "low";
@@ -28,6 +28,10 @@ export type WorkflowStatus =
   | "post_meeting_follow_up"
   | "contact_data_required"
   | "research_required"
+  | "not_interested"
+  | "wrong_number"
+  | "disqualified"
+  | "archived"
   | "won"
   | "lost"
   | "do_not_call"
@@ -128,6 +132,7 @@ export interface Lead {
   importedAt: ISODateTime;
   batchId: string;
   assignedCaller: string;
+  customFields: Record<string, string>;
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
   revision: number;
@@ -175,6 +180,9 @@ export type ColdCallOutcome =
   | "interested"
   | "follow_up"
   | "not_interested"
+  | "disqualified"
+  | "won"
+  | "lost"
   | "do_not_call"
   | "wrong_person"
   | "bad_number"
@@ -202,7 +210,7 @@ export interface CallAttempt {
   voidedAt: ISODateTime | null;
 }
 
-export type MeetingStatus = "booked" | "completed" | "cancelled" | "no_show";
+export type MeetingStatus = "booked" | "completed" | "cancelled" | "no_show" | "reschedule_needed";
 export type MeetingOutcome =
   | "won"
   | "decision_pending"
@@ -249,6 +257,9 @@ export interface PostMeetingTouch {
   touchNumber: number;
   type: PostMeetingTouchType;
   outcome: PostMeetingOutcomeKind;
+  dueAt: ISODateTime;
+  status: "completed";
+  completedAt: ISODateTime;
   occurredAt: ISODateTime;
   note: string;
   approver: string;

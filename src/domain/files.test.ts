@@ -22,6 +22,7 @@ import {
   rowToLeadDraft,
   serializeBackup,
   stringifyCsv,
+  tableToLeadDrafts,
   validateBackup,
 } from "./files";
 
@@ -80,6 +81,7 @@ function lead(overrides: Partial<Lead> = {}): Lead {
     updatedAt: NOW,
     revision: 0,
     ...overrides,
+    customFields: overrides.customFields ?? {},
   };
 }
 
@@ -230,6 +232,19 @@ describe("lead import mapping", () => {
     expect(result.drafts).toHaveLength(1);
     expect(result.errors).toEqual([{ rowNumber: 3, message: "Clinic Name is required." }]);
   });
+
+  it("keeps imported custom columns under their chosen field names", () => {
+    const result = tableToLeadDrafts(
+      [["Clinic", "Legacy Score", "Territory"], ["Harbor Skin", "92", "South East"]],
+      { mapping: { clinicName: 0 }, customColumns: { 1: "Legacy Score", 2: "Sales Territory" } },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.drafts[0].customFields).toEqual({
+      "Legacy Score": "92",
+      "Sales Territory": "South East",
+    });
+  });
 });
 
 describe("duplicate detection", () => {
@@ -310,7 +325,7 @@ describe("versioned JSON backup", () => {
       format: CRM_BACKUP_FORMAT,
       version: CRM_BACKUP_VERSION,
       exportedAt: NOW,
-      appSchemaVersion: 1,
+      appSchemaVersion: 2,
     });
     expect(parseBackup(json)).toEqual(state);
   });

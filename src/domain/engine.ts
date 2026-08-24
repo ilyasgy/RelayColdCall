@@ -17,6 +17,7 @@ import type {
   LeadImportInput,
   Meeting,
   MeetingOutcomeInput,
+  MeetingStatus,
   NextAction,
   PostMeetingOutcomeInput,
   PostMeetingTouch,
@@ -436,7 +437,7 @@ function normalizePhone(value: string): string {
 }
 
 export function findDuplicateLeadIds(state: CRMState, input: LeadImportInput): string[] {
-  const domain = normalizeDomain(input.websiteUrl ?? "");
+  const domain = normalizeDomain(input.websiteDomain ?? input.websiteUrl ?? "");
   const phone = normalizePhone(input.directPhone ?? input.mobilePhone ?? "");
   const name = input.clinicName.trim().toLowerCase();
   const city = (input.city ?? "").trim().toLowerCase();
@@ -496,7 +497,7 @@ export function importLeads(
       id,
       clinicName: input.clinicName.trim(),
       websiteUrl: input.websiteUrl ?? "",
-      websiteDomain: normalizeDomain(input.websiteUrl ?? ""),
+      websiteDomain: normalizeDomain(input.websiteDomain ?? input.websiteUrl ?? ""),
       city: input.city ?? "",
       state: input.state ?? "",
       timeZone: input.timeZone ?? state.settings.defaultLeadTimeZone,
@@ -540,6 +541,7 @@ export function importLeads(
       importedAt: at,
       batchId,
       assignedCaller: input.assignedCaller ?? "",
+      customFields: { ...(input.customFields ?? {}) },
       createdAt: at,
       updatedAt: at,
       revision: 1,
@@ -654,6 +656,8 @@ export function updateLead(
       patch.trackingTechnologies === undefined
         ? lead.trackingTechnologies
         : [...patch.trackingTechnologies],
+    customFields:
+      patch.customFields === undefined ? lead.customFields : { ...patch.customFields },
     updatedAt: at,
     revision: lead.revision + 1,
   };
@@ -707,6 +711,155 @@ export function updateLead(
   return draft;
 }
 
+export type BulkLeadAction =
+  | { type: "schedule"; dueAt: ISODateTime }
+  | { type: "reset_attempts" }
+  | { type: "set_pixel"; value: Lead["pixelPresent"] }
+  | { type: "archive" }
+  | { type: "add_today" }
+  | {
+      type: "set_status";
+      status: "new" | "not_interested" | "disqualified" | "won" | "lost" | "do_not_call";
+    };
+
+/** Applies one auditable operational change to a selected set of leads. */
+export function applyBulkLeadAction(
+  state: CRMState,
+  leadIds: readonly string[],
+  action: BulkLeadAction,
+  now: ISODateTime | Date = new Date(),
+): CRMState {
+  const ids = new Set(leadIds);
+  if (!ids.size) return state;
+  const at = asIso(now);
+  const draft = beginDraft(state, at);
+
+  draft.leads = draft.leads.map((lead) => {
+    if (!ids.has(lead.id)) return lead;
+    let updated = { ...lead, updatedAt: at, revision: lead.revision + 1 };
+
+    if (action.type === "set_pixel") {
+      updated.pixelPresent = action.value;
+    } else if (action.type === "archive") {
+      updated = {
+        ...updated,
+        status: "archived",
+        pipelineStage: "dormant",
+        callbackAt: null,
+        followUpAt: null,
+        nextAction: null,
+      };
+    } else if (action.type === "reset_attempts") {
+      if (lead.status === "do_not_call") return lead;
+      updated = {
+        ...updated,
+        status: hasCallableNumber(updated) ? "new" : "contact_data_required",
+        pipelineStage: "cold",
+        coldAttemptCount: 0,
+        coldNoAnswerCount: 0,
+        recycleCycle: 0,
+        badNumber: false,
+        nextAction: makeAction(draft, updated, at, {
+          type: hasCallableNumber(updated) ? "cold_call" : "contact_data_correction",
+          dueAt: at,
+          exact: false,
+          queueClass: hasCallableNumber(updated) ? "new_cold" : "non_call",
+          queueEligible: hasCallableNumber(updated),
+          reason: hasCallableNumber(updated) ? "Attempts reset; ready to call" : "A valid phone number is required",
+        }),
+      };
+    } else if (action.type === "schedule" || action.type === "add_today") {
+      if (TERMINAL_STATUSES.has(lead.status) || lead.doNotCall) return lead;
+      const dueAt = action.type === "schedule" ? asIso(action.dueAt) : at;
+      const postMeeting = lead.pipelineStage === "post_meeting";
+      const engaged = lead.pipelineStage === "engaged" || lead.status === "callback";
+      updated = {
+        ...updated,
+        status: postMeeting ? "post_meeting_follow_up" : engaged ? "conversation_follow_up" : "retry_scheduled",
+        followUpAt: postMeeting || engaged ? dueAt : lead.followUpAt,
+        callbackAt: null,
+        nextAction: makeAction(draft, updated, at, {
+          type: postMeeting ? "post_meeting_follow_up" : engaged ? "interested_follow_up" : "cold_retry",
+          dueAt,
+          exact: action.type === "schedule",
+          queueClass: postMeeting ? "post_meeting_follow_up" : engaged ? "interested_follow_up" : "cold_retry",
+          queueEligible: true,
+          reason: action.type === "add_today" ? "Manually added to today's queue" : "Next call scheduled manually",
+        }),
+      };
+    } else if (action.type === "set_status") {
+      if (action.status === "new") {
+        const callable = hasCallableNumber(updated);
+        updated = {
+          ...updated,
+          status: callable ? "new" : "contact_data_required",
+          pipelineStage: "cold",
+          doNotCall: false,
+          nextAction: makeAction(draft, updated, at, {
+            type: callable ? "cold_call" : "contact_data_correction",
+            dueAt: at,
+            exact: false,
+            queueClass: callable ? "new_cold" : "non_call",
+            queueEligible: callable,
+            reason: callable ? "Status changed to New" : "A valid phone number is required",
+          }),
+        };
+      } else {
+        updated = {
+          ...updated,
+          status: action.status,
+          pipelineStage: action.status === "won" ? "client" : "closed",
+          doNotCall: action.status === "do_not_call",
+          lostReason: ["not_interested", "disqualified", "lost"].includes(action.status)
+            ? lead.lostReason || action.status.replaceAll("_", " ")
+            : lead.lostReason,
+          callbackAt: null,
+          followUpAt: null,
+          nextAction: null,
+        };
+      }
+    }
+
+    appendActivity(draft, {
+      leadId: lead.id,
+      type: "lead_updated",
+      occurredAt: at,
+      title: `Bulk action: ${action.type.replaceAll("_", " ")}`,
+      note: "",
+      metadata: { action: action.type },
+    });
+    return updated;
+  });
+  return draft;
+}
+
+/** Permanently removes selected records only after the UI has confirmed the action. */
+export function deleteLeadsPermanently(
+  state: CRMState,
+  leadIds: readonly string[],
+  now: ISODateTime | Date = new Date(),
+): CRMState {
+  const ids = new Set(leadIds);
+  if (!ids.size) return state;
+  const at = asIso(now);
+  const draft = beginDraft(state, at);
+  draft.leads = draft.leads.filter((lead) => !ids.has(lead.id));
+  draft.activities = draft.activities.filter((activity) => !activity.leadId || !ids.has(activity.leadId));
+  draft.callAttempts = draft.callAttempts.filter((attempt) => !ids.has(attempt.leadId));
+  draft.meetings = draft.meetings.filter((meeting) => !ids.has(meeting.leadId));
+  draft.postMeetingTouches = draft.postMeetingTouches.filter((touch) => !ids.has(touch.leadId));
+  draft.sessions = draft.sessions.map((session) => ids.has(session.currentLeadId ?? "") ? { ...session, currentLeadId: null } : session);
+  appendActivity(draft, {
+    leadId: null,
+    type: "lead_updated",
+    occurredAt: at,
+    title: `${ids.size} lead${ids.size === 1 ? "" : "s"} permanently deleted`,
+    note: "Related local history was removed after confirmation.",
+    metadata: { deletedCount: ids.size },
+  });
+  return draft;
+}
+
 function callContextForLead(lead: Lead): CallAttempt["context"] {
   switch (lead.nextAction?.type) {
     case "cold_retry":
@@ -754,17 +907,6 @@ function advanceActiveSession(draft: CRMState, now: ISODateTime): void {
     ...draft.sessions[sessionIndex],
     currentLeadId: next?.lead.id ?? null,
   };
-}
-
-function isHighValue(state: CRMState, lead: Lead): boolean {
-  return (
-    lead.priority === "critical" ||
-    lead.priority === "high" ||
-    lead.findingStrength === "A" ||
-    lead.pixelPresent === "yes" ||
-    lead.contactType === "owner" ||
-    queuePriorityScore(state, lead).score >= 200
-  );
 }
 
 function requireInputDate(value: string | undefined, label: string): ISODateTime {
@@ -837,6 +979,9 @@ export function applyColdOutcome(
     "interested",
     "follow_up",
     "not_interested",
+    "disqualified",
+    "won",
+    "lost",
     "do_not_call",
     "wrong_person",
     "bad_number",
@@ -927,8 +1072,7 @@ export function applyColdOutcome(
         break;
       }
 
-      const initialMaximum = Math.max(1, draft.settings.calling.maximumInitialAttempts);
-      const lifetimeMaximum = Math.max(initialMaximum, draft.settings.calling.maximumLifetimeAttempts);
+      const initialMaximum = 3;
       if (coldNoAnswerCount < initialMaximum) {
         const delays = draft.settings.calling.retryDelaysBusinessDays;
         const delay =
@@ -945,51 +1089,6 @@ export function applyColdOutcome(
             queueClass: "cold_retry",
             queueEligible: true,
             reason: `No answer attempt ${coldNoAnswerCount}; automatic retry`,
-          }),
-        };
-      } else if (coldNoAnswerCount === initialMaximum && coldNoAnswerCount < lifetimeMaximum) {
-        const dueAt = automaticDueAt(
-          draft,
-          updated,
-          at,
-          draft.settings.calling.recycleDelayBusinessDays,
-          `recycle:${updated.recycleCycle + 1}`,
-        );
-        const eligible =
-          !draft.settings.calling.highValueExtendedAttemptsOnly || isHighValue(draft, updated);
-        updated = {
-          ...updated,
-          status: "recycle_later",
-          recycleCycle: updated.recycleCycle + 1,
-          nextAction: makeAction(draft, updated, at, {
-            type: eligible ? "recycled_call" : "manual_review",
-            dueAt,
-            exact: false,
-            queueClass: eligible ? "recycled" : "non_call",
-            queueEligible: eligible,
-            reason: eligible
-              ? "Initial attempts exhausted; eligible after recycle delay"
-              : "Initial attempts exhausted; review before an extended retry",
-          }),
-        };
-      } else if (coldNoAnswerCount < lifetimeMaximum) {
-        const dueAt = automaticDueAt(
-          draft,
-          updated,
-          at,
-          draft.settings.calling.defaultRetryDelayBusinessDays,
-          `extended:${coldNoAnswerCount}`,
-        );
-        updated = {
-          ...updated,
-          status: "extended_retry",
-          nextAction: makeAction(draft, updated, at, {
-            type: "cold_retry",
-            dueAt,
-            exact: false,
-            queueClass: "cold_retry",
-            queueEligible: true,
-            reason: `Extended attempt ${coldNoAnswerCount + 1} scheduled`,
           }),
         };
       } else {
@@ -1039,7 +1138,7 @@ export function applyColdOutcome(
           exact: true,
           queueClass: "non_call",
           queueEligible: false,
-          reason: `Attend meeting ${meeting.id}`,
+          reason: "Attend scheduled meeting",
         }),
       };
       const meetingActivity = appendActivity(draft, {
@@ -1077,9 +1176,35 @@ export function applyColdOutcome(
     case "not_interested":
       updated = {
         ...updated,
-        status: "lost",
+        status: "not_interested",
         pipelineStage: "closed",
         lostReason: input.lostReason ?? "Not Interested",
+        nextAction: null,
+      };
+      break;
+    case "disqualified":
+      updated = {
+        ...updated,
+        status: "disqualified",
+        pipelineStage: "closed",
+        lostReason: input.lostReason ?? "Disqualified",
+        nextAction: null,
+      };
+      break;
+    case "won":
+      updated = {
+        ...updated,
+        status: "won",
+        pipelineStage: "client",
+        nextAction: null,
+      };
+      break;
+    case "lost":
+      updated = {
+        ...updated,
+        status: "lost",
+        pipelineStage: "closed",
+        lostReason: input.lostReason ?? "Lost",
         nextAction: null,
       };
       break;
@@ -1129,40 +1254,13 @@ export function applyColdOutcome(
       break;
     }
     case "bad_number": {
-      const [alternate, ...remaining] = updated.alternatePhones.filter(Boolean);
-      if (alternate) {
-        updated = {
-          ...updated,
-          directPhone: alternate,
-          alternatePhones: remaining,
-          badNumber: false,
-          status: "new",
-          nextAction: makeAction(draft, updated, at, {
-            type: "cold_call",
-            dueAt: at,
-            exact: false,
-            queueClass: "new_cold",
-            queueEligible: true,
-            reason: "Using alternate phone after bad-number result",
-          }),
-        };
-      } else {
-        updated = {
-          ...updated,
-          badNumber: true,
-          directPhone: "",
-          mobilePhone: "",
-          status: "contact_data_required",
-          nextAction: makeAction(draft, updated, at, {
-            type: "contact_data_correction",
-            dueAt: at,
-            exact: false,
-            queueClass: "non_call",
-            queueEligible: false,
-            reason: "All known phone numbers are invalid",
-          }),
-        };
-      }
+      updated = {
+        ...updated,
+        badNumber: true,
+        status: "wrong_number",
+        pipelineStage: "closed",
+        nextAction: null,
+      };
       break;
     }
     case "other": {
@@ -1393,7 +1491,7 @@ export function completeMeeting(
           exact: true,
           queueClass: "non_call",
           queueEligible: false,
-          reason: `Attend second meeting ${secondMeeting.id}`,
+          reason: "Attend scheduled second meeting",
         }),
       };
       break;
@@ -1453,6 +1551,96 @@ export function completeMeeting(
     createdTouchIds: [],
   });
   advanceActiveSession(draft, at);
+  return draft;
+}
+
+export function updateMeetingStatus(
+  state: CRMState,
+  meetingId: string,
+  status: Extract<MeetingStatus, "booked" | "no_show" | "reschedule_needed">,
+  options: { scheduledAt?: ISODateTime; note?: string } = {},
+  now: ISODateTime | Date = new Date(),
+): CRMState {
+  const at = asIso(now);
+  const draft = beginDraft(state, at);
+  const meetingIndex = draft.meetings.findIndex((meeting) => meeting.id === meetingId && !meeting.voidedAt);
+  if (meetingIndex < 0) throw new DomainError(`Meeting ${meetingId} was not found`);
+  const meetingBefore = draft.meetings[meetingIndex];
+  if (meetingBefore.status === "completed") throw new DomainError("A completed meeting cannot be rescheduled");
+  const { lead, index: leadIndex } = requireLead(draft, meetingBefore.leadId);
+  const scheduledAt = options.scheduledAt ? asIso(options.scheduledAt) : meetingBefore.scheduledAt;
+  draft.meetings[meetingIndex] = {
+    ...meetingBefore,
+    status,
+    scheduledAt,
+    notes: options.note?.trim() || meetingBefore.notes,
+    updatedAt: at,
+  };
+
+  let updatedLead: Lead;
+  if (status === "booked") {
+    updatedLead = {
+      ...lead,
+      status: meetingBefore.meetingType.toLowerCase().includes("second") ? "second_meeting_booked" : "meeting_booked",
+      pipelineStage: "meeting",
+      nextAction: makeAction(draft, lead, at, {
+        type: "meeting",
+        dueAt: scheduledAt,
+        exact: true,
+        queueClass: "non_call",
+        queueEligible: false,
+        reason: "Attend scheduled meeting",
+      }),
+      updatedAt: at,
+      revision: lead.revision + 1,
+    };
+  } else if (status === "no_show") {
+    updatedLead = {
+      ...lead,
+      status: "conversation_follow_up",
+      pipelineStage: "engaged",
+      followUpAt: at,
+      nextAction: scheduleWarmFollowUp(draft, lead, at, at, "Follow up after meeting no-show", true),
+      updatedAt: at,
+      revision: lead.revision + 1,
+    };
+  } else {
+    updatedLead = {
+      ...lead,
+      status: "meeting_booked",
+      pipelineStage: "meeting",
+      nextAction: makeAction(draft, lead, at, {
+        type: "meeting",
+        dueAt: at,
+        exact: false,
+        queueClass: "non_call",
+        queueEligible: false,
+        reason: "Meeting needs a new date and time",
+      }),
+      updatedAt: at,
+      revision: lead.revision + 1,
+    };
+  }
+  replaceLead(draft, leadIndex, updatedLead);
+  const activity = appendActivity(draft, {
+    leadId: lead.id,
+    type: "status_changed",
+    occurredAt: at,
+    title: status === "booked" ? "Meeting rescheduled" : status === "no_show" ? "Meeting marked no-show" : "Meeting needs rescheduling",
+    note: options.note?.trim() ?? "",
+    metadata: { meetingId, meetingStatus: status, scheduledAt },
+  });
+  pushUndo(draft, {
+    id: allocateId(draft, "undo"),
+    label: `Meeting status: ${status.replaceAll("_", " ")}`,
+    createdAt: at,
+    leadBefore: lead,
+    meetingBefore,
+    createdActivityIds: [activity.id],
+    createdCallAttemptIds: [],
+    createdMeetingIds: [],
+    createdTouchIds: [],
+  });
   return draft;
 }
 
@@ -1554,6 +1742,9 @@ export function applyPostMeetingOutcome(
     touchNumber,
     type: touchType,
     outcome: input.outcome,
+    dueAt: lead.nextAction?.dueAt ?? at,
+    status: "completed",
+    completedAt: at,
     occurredAt: at,
     note: input.note?.trim() ?? "",
     approver: input.approver?.trim() ?? "",
@@ -1683,7 +1874,7 @@ export function applyPostMeetingOutcome(
           exact: true,
           queueClass: "non_call",
           queueEligible: false,
-          reason: `Attend second meeting ${secondMeeting.id}`,
+          reason: "Attend scheduled second meeting",
         }),
       };
       break;

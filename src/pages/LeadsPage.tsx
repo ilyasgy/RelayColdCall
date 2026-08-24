@@ -1,76 +1,153 @@
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
 import { LeadDrawer } from "../components/LeadDrawer";
-import { Badge, Button, EmptyState, PageHeader } from "../components/UI";
+import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/UI";
 import { useCRM } from "../data/store";
+import { applyBulkLeadAction, deleteLeadsPermanently } from "../domain/engine";
 import { downloadExport } from "../domain/files";
-import { CONTACT_TYPE_LABELS, PRIORITY_LABELS, STATUS_LABELS, STATUS_TONES } from "../lib/constants";
-import { cn, formatDateTime, formatLocalTime, relativeTime } from "../lib/format";
-import type { Lead } from "../types";
+import { CONTACT_TYPE_LABELS, STATUS_LABELS, STATUS_TONES } from "../lib/constants";
+import { cn, formatDateTime, toLocalInputValue } from "../lib/format";
+import type { Lead, PixelPresence } from "../types";
 
 interface LeadsPageProps {
   initialSearch?: string;
   onImport?: () => void;
 }
 
+type LeadColumn = "clinic" | "contact" | "role" | "phone" | "location" | "finding" | "stage" | "attempt" | "next" | "last";
+type BulkDialog = "schedule" | "status" | "pixel" | "delete" | null;
+
+const columnLabels: Record<LeadColumn, string> = {
+  clinic: "Clinic", contact: "Decision-maker", role: "Role", phone: "Phone", location: "Location",
+  finding: "Pixel / Finding", stage: "Stage", attempt: "Attempt", next: "Next Action", last: "Last Contact",
+};
+
+const defaultColumns: LeadColumn[] = ["clinic", "contact", "role", "phone", "location", "finding", "stage", "attempt", "next", "last"];
+
+function stageMatches(lead: Lead, value: string) {
+  if (value === "all") return true;
+  if (value === "new") return lead.status === "new";
+  if (value === "calling") return ["cold", "engaged"].includes(lead.pipelineStage) && !["new", "callback"].includes(lead.status);
+  if (value === "callback") return lead.status === "callback";
+  if (value === "meeting") return lead.pipelineStage === "meeting";
+  if (value === "follow_up") return lead.pipelineStage === "post_meeting";
+  if (value === "won") return lead.status === "won";
+  if (value === "lost") return ["lost", "not_interested", "disqualified"].includes(lead.status);
+  if (value === "unreachable") return ["dormant_unreachable", "dormant_post_meeting_no_response"].includes(lead.status);
+  return true;
+}
+
+function lifecycleLabel(lead: Lead) {
+  if (lead.status === "won") return "Won";
+  if (["lost", "not_interested", "disqualified", "wrong_number", "do_not_call", "archived", "dormant_unreachable", "dormant_post_meeting_no_response"].includes(lead.status)) return "Finished";
+  if (lead.pipelineStage === "meeting") return "Meeting";
+  if (lead.pipelineStage === "post_meeting") return "Follow-Up";
+  if (lead.status === "new") return "New";
+  return "Calling";
+}
+
 export function LeadsPage({ initialSearch = "", onImport }: LeadsPageProps) {
-  const { state, notify } = useCRM();
+  const { state, commit, notify } = useCRM();
   const [query, setQuery] = useState(initialSearch);
-  const [status, setStatus] = useState("all");
-  const [priority, setPriority] = useState("all");
+  const [stage, setStage] = useState("all");
   const [pixel, setPixel] = useState("all");
-  const [strength, setStrength] = useState("all");
-  const [contactType, setContactType] = useState("all");
-  const [batch, setBatch] = useState("all");
+  const [contact, setContact] = useState("all");
+  const [stateFilter, setStateFilter] = useState("all");
+  const [attempt, setAttempt] = useState("all");
+  const [due, setDue] = useState("all");
   const [drawerLeadId, setDrawerLeadId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [columns, setColumns] = useState<Set<LeadColumn>>(new Set(defaultColumns));
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [bulkDialog, setBulkDialog] = useState<BulkDialog>(null);
+  const [bulkDate, setBulkDate] = useState(() => toLocalInputValue(new Date()));
+  const [bulkStatus, setBulkStatus] = useState<"new" | "not_interested" | "disqualified" | "won" | "lost" | "do_not_call">("new");
+  const [bulkPixel, setBulkPixel] = useState<PixelPresence>("unknown");
 
   useEffect(() => setQuery(initialSearch), [initialSearch]);
 
+  const stateOptions = useMemo(() => [...new Set(state.leads.map((lead) => lead.state.trim()).filter(Boolean))].sort(), [state.leads]);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+
   const leads = useMemo(() => state.leads.filter((lead) => {
     const needle = query.trim().toLowerCase();
-    const matchesSearch = !needle || [lead.clinicName, lead.websiteUrl, lead.websiteDomain, lead.decisionMakerName, lead.directPhone, lead.mobilePhone, lead.email, lead.city, lead.state].some((value) => value.toLowerCase().includes(needle));
-    return matchesSearch
-      && (status === "all" || lead.status === status)
-      && (priority === "all" || lead.priority === priority)
+    const searchable = `${lead.clinicName} ${lead.websiteUrl} ${lead.decisionMakerName} ${lead.decisionMakerRole} ${lead.directPhone} ${lead.mobilePhone} ${lead.email} ${lead.city} ${lead.state}`.toLowerCase();
+    const actionAt = lead.nextAction ? new Date(lead.nextAction.dueAt).getTime() : null;
+    const dueMatch = due === "all"
+      || (due === "overdue" && actionAt !== null && actionAt < todayStart.getTime())
+      || (due === "today" && actionAt !== null && actionAt >= todayStart.getTime() && actionAt <= todayEnd.getTime())
+      || (due === "future" && actionAt !== null && actionAt > todayEnd.getTime());
+    const contactMatch = contact === "all" || (contact === "manager" ? ["practice_manager", "office_manager"].includes(lead.contactType) : lead.contactType === contact);
+    return (!needle || searchable.includes(needle))
+      && stageMatches(lead, stage)
       && (pixel === "all" || lead.pixelPresent === pixel)
-      && (strength === "all" || lead.findingStrength === strength)
-      && (contactType === "all" || lead.contactType === contactType)
-      && (batch === "all" || lead.batchId === batch);
-  }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [batch, contactType, pixel, priority, query, state.leads, status, strength]);
-  const activeFilters = [status, priority, pixel, strength, contactType, batch].filter((value) => value !== "all").length;
+      && contactMatch
+      && (stateFilter === "all" || lead.state === stateFilter)
+      && (attempt === "all" || lead.coldNoAnswerCount === Number(attempt))
+      && dueMatch;
+  }).sort((left, right) => (left.nextAction?.dueAt ?? "9999").localeCompare(right.nextAction?.dueAt ?? "9999") || right.updatedAt.localeCompare(left.updatedAt)), [attempt, contact, due, pixel, query, stage, state.leads, stateFilter, todayEnd, todayStart]);
 
-  const clearFilters = () => {
-    setStatus("all"); setPriority("all"); setPixel("all"); setStrength("all"); setContactType("all"); setBatch("all"); setQuery("");
+  const activeFilters = [stage, pixel, contact, stateFilter, attempt, due].filter((value) => value !== "all").length;
+  const selectedIds = [...selected];
+  const selectVisible = (checked: boolean) => setSelected((current) => {
+    const next = new Set(current);
+    leads.forEach((lead) => checked ? next.add(lead.id) : next.delete(lead.id));
+    return next;
+  });
+  const clearFilters = () => { setStage("all"); setPixel("all"); setContact("all"); setStateFilter("all"); setAttempt("all"); setDue("all"); setQuery(""); };
+
+  const runBulk = (label: string, recipe: Parameters<typeof commit>[1], message: string) => {
+    commit(label, recipe, message);
+    setSelected(new Set());
+    setBulkDialog(null);
   };
 
-  return (
-    <>
-      <PageHeader
-        eyebrow="Lead database"
-        title="All Leads"
-        description={`${state.leads.length.toLocaleString()} retained records. Every active lead has an explicit next action.`}
-        actions={<><Button variant="secondary" onClick={() => void downloadExport({ kind: "all-leads", format: "csv", state }).then((fileName) => notify(`${fileName} downloaded`, "success")).catch(() => notify("Lead export failed", "danger"))} startIcon={<Icon name="download" size={16} />}>Export all leads</Button><Button variant="primary" onClick={onImport} startIcon={<Icon name="plus" size={16} />}>Import leads</Button></>}
-      />
-      <section className="panel data-panel">
-        <div className="filter-toolbar">
-          <label className="search-field"><Icon name="search" size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search clinic, contact, phone, email…" /><span>{leads.length} results</span></label>
-          <div className="filter-selects">
-            <label><span className="sr-only">Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label><span className="sr-only">Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="all">All priorities</option>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label><span className="sr-only">Pixel</span><select value={pixel} onChange={(event) => setPixel(event.target.value)}><option value="all">Any pixel</option><option value="yes">Pixel: Yes</option><option value="no">Pixel: No</option><option value="unknown">Pixel: Unknown</option></select></label>
-            <label><span className="sr-only">Finding strength</span><select value={strength} onChange={(event) => setStrength(event.target.value)}><option value="all">Any finding</option><option value="A">Finding A</option><option value="B">Finding B</option><option value="C">Finding C</option><option value="unknown">Unknown</option></select></label>
-            <label><span className="sr-only">Contact type</span><select value={contactType} onChange={(event) => setContactType(event.target.value)}><option value="all">Any contact</option>{Object.entries(CONTACT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label><span className="sr-only">Batch</span><select value={batch} onChange={(event) => setBatch(event.target.value)}><option value="all">All batches</option>{state.batches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          </div>
-          {activeFilters || query ? <Button variant="ghost" size="sm" onClick={clearFilters} startIcon={<Icon name="close" size={14} />}>Clear {activeFilters ? `${activeFilters} filters` : "search"}</Button> : null}
-        </div>
-        {leads.length ? <LeadTable leads={leads} onOpen={setDrawerLeadId} /> : state.leads.length ? <EmptyState icon={<Icon name="search" size={25} />} title="No leads match" description="Clear a filter or search for a different clinic, person, phone, or email." action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} /> : <EmptyState icon={<Icon name="leads" size={25} />} title="No leads yet" description="Import your first CSV or XLSX lead list to build the calling queue." action={<Button variant="primary" onClick={onImport}>Import lead list</Button>} />}
-      </section>
-      <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
-    </>
-  );
+  return <>
+    <PageHeader eyebrow="Master database" title="Leads" description={`${state.leads.length.toLocaleString()} retained lead${state.leads.length === 1 ? "" : "s"}. Search, filter, and update records without losing history.`} actions={<><Button variant="secondary" onClick={() => void downloadExport({ kind: "all-leads", format: "csv", state }).then((name) => notify(`${name} downloaded`, "success")).catch(() => notify("Export failed", "danger"))} startIcon={<Icon name="download" size={16} />}>Export</Button><Button variant="primary" onClick={onImport} startIcon={<Icon name="upload" size={16} />}>Import leads</Button></>} />
+
+    <section className="panel data-panel leads-master-panel">
+      <div className="leads-toolbar">
+        <label className="search-field"><Icon name="search" size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search clinic, contact, phone, website…" /><span>{leads.length} results</span></label>
+        <div className="columns-control"><Button variant="secondary" size="sm" onClick={() => setColumnsOpen((open) => !open)} startIcon={<Icon name="table" size={15} />}>Columns</Button>{columnsOpen ? <div className="columns-menu">{(Object.keys(columnLabels) as LeadColumn[]).map((column) => <label key={column}><input type="checkbox" checked={columns.has(column)} onChange={(event) => setColumns((current) => { const next = new Set(current); event.target.checked ? next.add(column) : next.delete(column); return next; })} />{columnLabels[column]}</label>)}</div> : null}</div>
+      </div>
+      <div className="filter-row">
+        <select value={stage} onChange={(event) => setStage(event.target.value)} aria-label="Stage"><option value="all">All stages</option><option value="new">New</option><option value="calling">Calling</option><option value="callback">Callback</option><option value="meeting">Meeting</option><option value="follow_up">Follow-Up</option><option value="won">Won</option><option value="lost">Lost / closed</option><option value="unreachable">Unreachable</option></select>
+        <select value={pixel} onChange={(event) => setPixel(event.target.value)} aria-label="Pixel"><option value="all">Pixel: any</option><option value="yes">Pixel</option><option value="no">No pixel</option><option value="unknown">Pixel unknown</option></select>
+        <select value={contact} onChange={(event) => setContact(event.target.value)} aria-label="Contact type"><option value="all">Owner / manager: any</option><option value="owner">Owner</option><option value="manager">Manager</option>{Object.entries(CONTACT_TYPE_LABELS).filter(([value]) => !["owner", "practice_manager", "office_manager"].includes(value)).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
+        <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)} aria-label="State"><option value="all">All states</option>{stateOptions.map((value) => <option key={value}>{value}</option>)}</select>
+        <select value={attempt} onChange={(event) => setAttempt(event.target.value)} aria-label="Attempt"><option value="all">Any attempt</option><option value="0">Attempt 0</option><option value="1">Attempt 1</option><option value="2">Attempt 2</option><option value="3">Attempt 3</option></select>
+        <select value={due} onChange={(event) => setDue(event.target.value)} aria-label="Due"><option value="all">Any due date</option><option value="overdue">Overdue</option><option value="today">Due today</option><option value="future">Future</option></select>
+        {activeFilters || query ? <Button variant="ghost" size="sm" onClick={clearFilters} startIcon={<Icon name="close" size={14} />}>Clear {activeFilters ? `${activeFilters} filters` : "search"}</Button> : null}
+      </div>
+
+      {selected.size ? <div className="bulk-bar"><strong>{selected.size} selected</strong><Button size="sm" variant="primary" onClick={() => runBulk("Added to Today", (current) => applyBulkLeadAction(current, selectedIds, { type: "add_today" }), `${selected.size} lead${selected.size === 1 ? "" : "s"} added to Today`)}>Add to Today</Button><Button size="sm" variant="secondary" onClick={() => setBulkDialog("schedule")}>Schedule</Button><Button size="sm" variant="secondary" onClick={() => setBulkDialog("status")}>Change status</Button><Button size="sm" variant="secondary" onClick={() => setBulkDialog("pixel")}>Set pixel</Button><Button size="sm" variant="secondary" onClick={() => runBulk("Attempts reset", (current) => applyBulkLeadAction(current, selectedIds, { type: "reset_attempts" }), "Attempts reset")}>Reset attempts</Button><Button size="sm" variant="secondary" onClick={() => runBulk("Leads archived", (current) => applyBulkLeadAction(current, selectedIds, { type: "archive" }), "Selected leads archived")}>Archive</Button><Button size="sm" variant="secondary" onClick={() => { const chosen = new Set(selectedIds); const exportState = { ...state, leads: state.leads.filter((lead) => chosen.has(lead.id)) }; void downloadExport({ kind: "all-leads", format: "csv", state: exportState }).then((name) => notify(`${name} downloaded`, "success")).catch(() => notify("Export failed", "danger")); }}>Export</Button><Button size="sm" variant="danger" onClick={() => setBulkDialog("delete")}>Delete</Button><Button size="icon" variant="ghost" onClick={() => setSelected(new Set())} aria-label="Clear selection"><Icon name="close" size={15} /></Button></div> : null}
+
+      {leads.length ? <LeadTable leads={leads} onOpen={setDrawerLeadId} selectable selected={selected} onSelect={setSelected} onSelectVisible={selectVisible} visibleColumns={columns} /> : state.leads.length ? <EmptyState icon={<Icon name="search" size={25} />} title="No leads match" description="Clear a filter or search for a different clinic, person, phone, or location." action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} /> : <EmptyState icon={<Icon name="leads" size={25} />} title="No leads yet" description="Import a CSV or XLSX file to build your lead database." action={<Button variant="primary" onClick={onImport}>Import leads</Button>} />}
+    </section>
+
+    <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
+    <Modal open={bulkDialog === "schedule"} onClose={() => setBulkDialog(null)} title="Schedule next call" description={`Assign one date and time to ${selected.size} selected lead${selected.size === 1 ? "" : "s"}.`} size="sm" footer={<><Button variant="ghost" onClick={() => setBulkDialog(null)}>Cancel</Button><Button variant="primary" disabled={!bulkDate} onClick={() => runBulk("Calls scheduled", (current) => applyBulkLeadAction(current, selectedIds, { type: "schedule", dueAt: new Date(bulkDate).toISOString() }), "Next calls scheduled")}>Schedule</Button></>}><label className="field"><span>Date and time</span><input type="datetime-local" value={bulkDate} onChange={(event) => setBulkDate(event.target.value)} /></label></Modal>
+    <Modal open={bulkDialog === "status"} onClose={() => setBulkDialog(null)} title="Change lead status" description="Only lifecycle-safe statuses are available for bulk changes." size="sm" footer={<><Button variant="ghost" onClick={() => setBulkDialog(null)}>Cancel</Button><Button variant="primary" onClick={() => runBulk("Status changed", (current) => applyBulkLeadAction(current, selectedIds, { type: "set_status", status: bulkStatus }), "Selected statuses updated")}>Apply status</Button></>}><label className="field"><span>Status</span><select value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value as typeof bulkStatus)}><option value="new">New</option><option value="not_interested">Not interested</option><option value="disqualified">Disqualified</option><option value="won">Won</option><option value="lost">Lost</option><option value="do_not_call">Do not contact</option></select></label></Modal>
+    <Modal open={bulkDialog === "pixel"} onClose={() => setBulkDialog(null)} title="Set tracking pixel" size="sm" footer={<><Button variant="ghost" onClick={() => setBulkDialog(null)}>Cancel</Button><Button variant="primary" onClick={() => runBulk("Pixel status changed", (current) => applyBulkLeadAction(current, selectedIds, { type: "set_pixel", value: bulkPixel }), "Pixel status updated")}>Apply</Button></>}><label className="field"><span>Tracking pixel</span><select value={bulkPixel} onChange={(event) => setBulkPixel(event.target.value as PixelPresence)}><option value="yes">Pixel present</option><option value="no">No pixel</option><option value="unknown">Unknown</option></select></label></Modal>
+    <Modal open={bulkDialog === "delete"} onClose={() => setBulkDialog(null)} title={`Permanently delete ${selected.size} lead${selected.size === 1 ? "" : "s"}?`} description="This removes the selected leads and their call, meeting, note, and follow-up history from this device. This cannot be undone after the undo window closes." size="sm" footer={<><Button variant="ghost" onClick={() => setBulkDialog(null)}>Cancel</Button><Button variant="danger" onClick={() => runBulk("Leads permanently deleted", (current) => deleteLeadsPermanently(current, selectedIds), `${selected.size} lead${selected.size === 1 ? "" : "s"} deleted`)}>Delete permanently</Button></>}><div className="danger-callout"><Icon name="warning" size={20} /><div><strong>History will also be deleted</strong><p>Use Archive if you want the records hidden but preserved.</p></div></div></Modal>
+  </>;
 }
 
-export function LeadTable({ leads, onOpen }: { leads: Lead[]; onOpen: (leadId: string) => void }) {
-  return <div className="table-wrap"><table className="data-table"><thead><tr><th>Clinic / contact</th><th>Status</th><th>Next action</th><th>Attempts</th><th>Local time</th><th>Finding</th><th>Priority</th><th><span className="sr-only">Open</span></th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} onClick={() => onOpen(lead.id)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && onOpen(lead.id)}><td data-label="Clinic"><div className="lead-cell"><span className="lead-avatar">{lead.clinicName.slice(0, 2).toUpperCase()}</span><span><strong>{lead.clinicName}</strong><small>{lead.decisionMakerName || "Contact needed"} · {lead.city}, {lead.state}</small></span></div></td><td data-label="Status"><Badge tone={STATUS_TONES[lead.status] as "info"} size="sm" dot>{STATUS_LABELS[lead.status]}</Badge></td><td data-label="Next action"><div className="next-action-cell"><strong>{lead.nextAction?.reason ?? "No future action"}</strong><small className={cn(lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < Date.now() && "is-overdue")}>{lead.nextAction ? `${relativeTime(lead.nextAction.dueAt)} · ${formatDateTime(lead.nextAction.dueAt)}` : "History retained"}</small></div></td><td data-label="Attempts"><div className="attempt-cell"><span><strong>{lead.coldAttemptCount}</strong> cold</span>{(lead.pipelineStage === "post_meeting" || lead.postMeetingTouchCount > 0) && <span><strong>{lead.postMeetingTouchCount}</strong> / 5 warm</span>}</div></td><td data-label="Local time"><span className="local-time-cell">{formatLocalTime(lead.timeZone)}</span></td><td data-label="Finding"><div className="finding-cell"><span className={`finding-letter is-${lead.findingStrength.toLowerCase()}`}>{lead.findingStrength}</span><span><strong>{lead.findingCategory || "Uncategorized"}</strong><small>Pixel: {lead.pixelPresent}</small></span></div></td><td data-label="Priority"><Badge tone={lead.priority === "critical" ? "danger" : lead.priority === "high" ? "warning" : "neutral"} size="sm">{PRIORITY_LABELS[lead.priority]}</Badge></td><td><Button variant="ghost" size="icon" aria-label={`Open ${lead.clinicName}`}><Icon name="chevronRight" size={16} /></Button></td></tr>)}</tbody></table></div>;
+export function LeadTable({ leads, onOpen, selectable = false, selected = new Set(), onSelect, onSelectVisible, visibleColumns = new Set(defaultColumns) }: { leads: Lead[]; onOpen: (leadId: string) => void; selectable?: boolean; selected?: Set<string>; onSelect?: (next: Set<string>) => void; onSelectVisible?: (checked: boolean) => void; visibleColumns?: Set<LeadColumn> }) {
+  const toggle = (id: string, checked: boolean) => { if (!onSelect) return; const next = new Set(selected); checked ? next.add(id) : next.delete(id); onSelect(next); };
+  const allVisibleSelected = leads.length > 0 && leads.every((lead) => selected.has(lead.id));
+  return <div className="table-wrap"><table className="data-table leads-table"><thead><tr>{selectable ? <th className="select-column"><input type="checkbox" checked={allVisibleSelected} onChange={(event) => onSelectVisible?.(event.target.checked)} aria-label="Select visible leads" /></th> : null}{(Object.keys(columnLabels) as LeadColumn[]).filter((column) => visibleColumns.has(column)).map((column) => <th key={column}>{columnLabels[column]}</th>)}<th><span className="sr-only">Open</span></th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} className={cn(selected.has(lead.id) && "is-selected")} onDoubleClick={() => onOpen(lead.id)}>{selectable ? <td className="select-column"><input type="checkbox" checked={selected.has(lead.id)} onChange={(event) => toggle(lead.id, event.target.checked)} aria-label={`Select ${lead.clinicName}`} /></td> : null}
+    {visibleColumns.has("clinic") ? <td><button className="table-primary-link" onClick={() => onOpen(lead.id)}>{lead.clinicName}</button><small>{lead.websiteDomain || "No website"}</small></td> : null}
+    {visibleColumns.has("contact") ? <td><strong>{lead.decisionMakerName || "Not recorded"}</strong></td> : null}
+    {visibleColumns.has("role") ? <td>{lead.decisionMakerRole || CONTACT_TYPE_LABELS[lead.contactType]}</td> : null}
+    {visibleColumns.has("phone") ? <td><strong>{lead.directPhone || lead.mobilePhone || "—"}</strong></td> : null}
+    {visibleColumns.has("location") ? <td>{[lead.city, lead.state].filter(Boolean).join(", ") || "—"}</td> : null}
+    {visibleColumns.has("finding") ? <td><Badge tone={lead.pixelPresent === "yes" ? "purple" : "neutral"} size="sm">Pixel: {lead.pixelPresent}</Badge><small>{lead.primaryFinding || `Finding ${lead.findingStrength}`}</small></td> : null}
+    {visibleColumns.has("stage") ? <td><Badge tone={STATUS_TONES[lead.status] as "info"} size="sm">{lifecycleLabel(lead)}</Badge><small>{STATUS_LABELS[lead.status]}</small></td> : null}
+    {visibleColumns.has("attempt") ? <td>{lead.pipelineStage === "post_meeting" ? <strong>{lead.postMeetingTouchCount} / 5 touches</strong> : <strong>{lead.coldNoAnswerCount} / 3</strong>}</td> : null}
+    {visibleColumns.has("next") ? <td><strong>{lead.nextAction?.reason ?? "No future action"}</strong><small className={cn(lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < Date.now() && "text-danger")}>{lead.nextAction ? formatDateTime(lead.nextAction.dueAt) : "History retained"}</small></td> : null}
+    {visibleColumns.has("last") ? <td>{lead.lastCalledAt ? formatDateTime(lead.lastCalledAt) : "Never"}</td> : null}
+    <td><Button variant="ghost" size="icon" onClick={() => onOpen(lead.id)} aria-label={`Open ${lead.clinicName}`}><Icon name="chevronRight" size={16} /></Button></td>
+  </tr>)}</tbody></table></div>;
 }

@@ -81,10 +81,6 @@ function settingsValidation(settings: CRMSettings): string[] {
     issues.push("Calling hours must end after they start.");
   }
   if (settings.calling.dailyCallGoal < 1) issues.push("Daily call goal must be at least 1.");
-  if (settings.calling.maximumInitialAttempts < 1) issues.push("Maximum initial attempts must be at least 1.");
-  if (settings.calling.maximumLifetimeAttempts < settings.calling.maximumInitialAttempts) {
-    issues.push("Maximum lifetime attempts cannot be lower than the initial-attempt limit.");
-  }
   if (settings.calling.callingWeekdays.length === 0) issues.push("Select at least one calling weekday.");
   if (new Set(settings.queue.classOrder).size !== 6 || settings.queue.classOrder.length !== 6) {
     issues.push("Every queue priority class must appear exactly once.");
@@ -341,19 +337,16 @@ function CallingSettingsPanel({ settings, edit }: SettingsPanelProps) {
   return (
     <>
       <SettingsSection title="Calling window" description="Eligibility is evaluated in each prospect's local time zone.">
-        <SettingsRow title="Daily call goal" description="Shown prominently in Dashboard and Focus Mode."><NumberInput value={calling.dailyCallGoal} min={1} onChange={(dailyCallGoal) => update({ dailyCallGoal })} suffix="calls" /></SettingsRow>
+        <SettingsRow title="Daily call goal" description="Shown prominently in Today and Focus Mode."><NumberInput value={calling.dailyCallGoal} min={1} onChange={(dailyCallGoal) => update({ dailyCallGoal })} suffix="calls" /></SettingsRow>
         <SettingsRow title="Calling hours" description="Leads outside this local window wait automatically."><div style={controlGrid(2)}><input aria-label="Calling hours start" type="time" value={calling.callingHoursStart} onChange={(event) => update({ callingHoursStart: event.target.value })} /><input aria-label="Calling hours end" type="time" value={calling.callingHoursEnd} onChange={(event) => update({ callingHoursEnd: event.target.value })} /></div></SettingsRow>
         <SettingsRow title="Calling weekdays" description="Business-day retry calculations use the same work week."><div className="segmented" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>{WEEKDAYS.map(([value, label]) => <button key={value} className="segmented__item" aria-pressed={calling.callingWeekdays.includes(value)} onClick={() => update({ callingWeekdays: calling.callingWeekdays.includes(value) ? calling.callingWeekdays.filter((day) => day !== value) : [...calling.callingWeekdays, value] })}>{label}</button>)}</div></SettingsRow>
         <SettingsRow title="Exact callback override" description="Honor a prospect-requested exact time even outside the normal window."><Toggle checked={calling.exactCallbacksOverrideCallingHours} label={calling.exactCallbacksOverrideCallingHours ? "Enabled" : "Disabled"} onChange={(exactCallbacksOverrideCallingHours) => update({ exactCallbacksOverrideCallingHours })} /></SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Retry and recycle" description="No Answer schedules itself; callers never calculate the next date.">
+      <SettingsSection title="Retry rules" description="No Answer schedules attempts 1 and 2; the third unanswered attempt moves the lead to Finished as Unreachable.">
         <SettingsRow title="Default retry delay" description="Fallback when an attempt-specific delay is unavailable."><NumberInput value={calling.defaultRetryDelayBusinessDays} min={0} onChange={(defaultRetryDelayBusinessDays) => update({ defaultRetryDelayBusinessDays })} suffix="business days" /></SettingsRow>
-        <SettingsRow title="Attempt retry delays" description="Comma-separated business-day delays after attempts 1, 2, and onward."><input type="text" value={calling.retryDelaysBusinessDays.join(", ")} onChange={(event) => update({ retryDelaysBusinessDays: parseNumberList(event.target.value) })} aria-label="Attempt retry delays" /></SettingsRow>
-        <SettingsRow title="Maximum initial attempts" description="Default cold cycle ends in Recycle Later."><NumberInput value={calling.maximumInitialAttempts} min={1} onChange={(maximumInitialAttempts) => update({ maximumInitialAttempts })} suffix="attempts" /></SettingsRow>
-        <SettingsRow title="Recycle delay" description="When exhausted initial-cycle leads become eligible again."><NumberInput value={calling.recycleDelayBusinessDays} min={1} onChange={(recycleDelayBusinessDays) => update({ recycleDelayBusinessDays })} suffix="business days" /></SettingsRow>
-        <SettingsRow title="Maximum lifetime attempts" description="After this, retain the lead as Dormant / Unreachable."><NumberInput value={calling.maximumLifetimeAttempts} min={calling.maximumInitialAttempts} onChange={(maximumLifetimeAttempts) => update({ maximumLifetimeAttempts })} suffix="attempts" /></SettingsRow>
-        <SettingsRow title="Extended attempts for high-value only" description="Restrict attempts 4–5 to strong findings, owner contacts, pixel leads, and engaged prospects."><Toggle checked={calling.highValueExtendedAttemptsOnly} label={calling.highValueExtendedAttemptsOnly ? "High-value only" : "All eligible leads"} onChange={(highValueExtendedAttemptsOnly) => update({ highValueExtendedAttemptsOnly })} /></SettingsRow>
+        <SettingsRow title="Attempt retry delays" description="Business-day delays after unanswered attempts 1 and 2."><input type="text" value={calling.retryDelaysBusinessDays.slice(0, 2).join(", ")} onChange={(event) => update({ retryDelaysBusinessDays: parseNumberList(event.target.value).slice(0, 2) })} aria-label="Attempt retry delays" /></SettingsRow>
+        <SettingsRow title="Cold-call limit" description="Cold attempts and post-meeting touches are tracked separately."><Badge tone="accent">3 unanswered attempts</Badge></SettingsRow>
         <SettingsRow title="Retry time buckets" description="The engine rotates these local times to avoid repeating the same hour."><input type="text" value={calling.retryTimeBuckets.join(", ")} onChange={(event) => update({ retryTimeBuckets: parseTextList(event.target.value) })} aria-label="Retry time buckets" /></SettingsRow>
         <SettingsRow title="Holiday dates" description="Optional ISO dates (YYYY-MM-DD), separated by commas."><input type="text" value={calling.holidayDates.join(", ")} onChange={(event) => update({ holidayDates: parseTextList(event.target.value) })} aria-label="Holiday dates" placeholder="2026-12-25" /></SettingsRow>
       </SettingsSection>
@@ -364,18 +357,12 @@ function CallingSettingsPanel({ settings, edit }: SettingsPanelProps) {
 function QueueSettingsPanel({ settings, edit }: SettingsPanelProps) {
   const queue = settings.queue;
   const update = (patch: Partial<CRMSettings["queue"]>) => edit((current) => ({ ...current, queue: { ...current.queue, ...patch } }));
-  const move = (index: number, direction: -1 | 1) => {
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= queue.classOrder.length) return;
-    const classOrder = [...queue.classOrder];
-    [classOrder[index], classOrder[nextIndex]] = [classOrder[nextIndex], classOrder[index]];
-    update({ classOrder });
-  };
+  const visibleOrder = queue.classOrder.filter((queueClass) => queueClass !== "recycled");
   return (
     <>
-      <SettingsSection title="Queue priority order" description="The first due and eligible class wins; scoring breaks ties inside each class.">
+      <SettingsSection title="Queue priority order" description="Relay keeps this lifecycle-based order fixed; scoring breaks ties inside each class.">
         <div className="card-list" style={{ padding: 14 }}>
-          {queue.classOrder.map((queueClass, index) => <div className="context-block" key={queueClass} style={{ display: "flex", alignItems: "center", gap: 10 }}><Badge tone={index < 2 ? "accent" : "neutral"}>{index + 1}</Badge><strong style={{ flex: 1 }}>{QUEUE_LABELS[queueClass]}</strong><Button variant="ghost" size="icon" aria-label={`Move ${QUEUE_LABELS[queueClass]} up`} disabled={index === 0} onClick={() => move(index, -1)}><Icon name="arrowUp" size={15} /></Button><Button variant="ghost" size="icon" aria-label={`Move ${QUEUE_LABELS[queueClass]} down`} disabled={index === queue.classOrder.length - 1} onClick={() => move(index, 1)}><Icon name="arrowDown" size={15} /></Button></div>)}
+          {visibleOrder.map((queueClass, index) => <div className="context-block" key={queueClass} style={{ display: "flex", alignItems: "center", gap: 10 }}><Badge tone={index < 2 ? "accent" : "neutral"}>{index + 1}</Badge><strong style={{ flex: 1 }}>{QUEUE_LABELS[queueClass]}</strong><Badge tone="neutral">Fixed</Badge></div>)}
         </div>
       </SettingsSection>
       <SettingsSection title="Priority scoring" description="Simple bonuses influence ordering inside a queue class; the caller still sees only NEXT CALL.">

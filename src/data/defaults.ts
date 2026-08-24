@@ -7,8 +7,8 @@ import {
 } from "../types";
 
 export const DEFAULT_QUEUE_CLASS_ORDER: QueueClass[] = [
-  "exact_callback",
   "post_meeting_follow_up",
+  "exact_callback",
   "interested_follow_up",
   "cold_retry",
   "new_cold",
@@ -18,6 +18,10 @@ export const DEFAULT_QUEUE_CLASS_ORDER: QueueClass[] = [
 export const TERMINAL_STATUSES: ReadonlySet<WorkflowStatus> = new Set([
   "won",
   "lost",
+  "not_interested",
+  "wrong_number",
+  "disqualified",
+  "archived",
   "do_not_call",
   "dormant_unreachable",
   "dormant_post_meeting_no_response",
@@ -33,7 +37,7 @@ export const DEFAULT_SETTINGS: CRMSettings = {
     retryDelaysBusinessDays: [1, 2],
     maximumInitialAttempts: 3,
     recycleDelayBusinessDays: 14,
-    maximumLifetimeAttempts: 5,
+    maximumLifetimeAttempts: 3,
     highValueExtendedAttemptsOnly: false,
     retryTimeBuckets: ["09:15", "13:30", "16:15"],
     exactCallbacksOverrideCallingHours: true,

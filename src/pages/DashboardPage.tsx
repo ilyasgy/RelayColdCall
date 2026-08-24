@@ -1,222 +1,196 @@
-import { useMemo } from "react";
-import { useCRM } from "../data/store";
-import { computeAnalytics, getQueue, startSession } from "../domain/engine";
-import type { CRMState } from "../types";
+import { useMemo, useState } from "react";
+import { Badge, Button, EmptyState, PageHeader, Progress } from "../components/UI";
 import { Icon } from "../components/Icon";
-import { Badge, Button, EmptyState, MetricCard, PageHeader, Progress } from "../components/UI";
+import { LeadDrawer } from "../components/LeadDrawer";
+import { useCRM } from "../data/store";
+import { startSession } from "../domain/engine";
 import { STATUS_LABELS, STATUS_TONES, type Route } from "../lib/constants";
-import { formatDateTime, formatNumber, formatPercent } from "../lib/format";
+import { cn, formatDateTime } from "../lib/format";
+import type { Lead, QueueClass } from "../types";
 
 interface DashboardPageProps {
   onNavigate: (route: Route) => void;
   onStartCalling: () => void;
 }
 
-function todayStart() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+type TodayCategory = "follow_up" | "callback" | "retry" | "new";
+
+interface TodayItem {
+  lead: Lead;
+  category: TodayCategory;
+  priority: 2 | 3 | 4 | 5;
 }
 
-function dayKey(value: string | Date) {
-  const date = new Date(value);
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+function startOfToday() {
+  const value = new Date();
+  value.setHours(0, 0, 0, 0);
+  return value;
 }
 
-function buildDailySeries(state: CRMState) {
-  return Array.from({ length: 7 }, (_, reverseIndex) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - reverseIndex));
-    date.setHours(0, 0, 0, 0);
-    const key = dayKey(date);
-    const calls = state.callAttempts.filter((attempt) => !attempt.voidedAt && dayKey(attempt.occurredAt) === key);
-    const meetings = state.meetings.filter((meeting) => !meeting.voidedAt && dayKey(meeting.createdAt) === key);
-    return {
-      label: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date),
-      calls: calls.length,
-      conversations: calls.filter((call) => call.meaningfulConversation).length,
-      meetings: meetings.length,
-    };
-  });
+function endOfToday() {
+  const value = new Date();
+  value.setHours(23, 59, 59, 999);
+  return value;
+}
+
+function categoryFor(queueClass: QueueClass): TodayCategory {
+  if (queueClass === "post_meeting_follow_up") return "follow_up";
+  if (queueClass === "exact_callback" || queueClass === "interested_follow_up") return "callback";
+  if (queueClass === "cold_retry" || queueClass === "recycled") return "retry";
+  return "new";
+}
+
+function stageFor(lead: Lead) {
+  if (lead.status === "won") return "Won";
+  if (["meeting_booked", "second_meeting_booked"].includes(lead.status)) return "Meeting";
+  if (lead.pipelineStage === "post_meeting") return "Follow-Up";
+  if (lead.status === "new") return "New";
+  return "Calling";
+}
+
+function priorityFor(category: TodayCategory): 2 | 3 | 4 | 5 {
+  return category === "follow_up" ? 2 : category === "callback" ? 3 : category === "retry" ? 4 : 5;
+}
+
+function priorityWeight(lead: Lead) {
+  const manual = { critical: 4, high: 3, normal: 2, low: 1 }[lead.priority];
+  const finding = { A: 3, B: 2, C: 1, unknown: 0 }[lead.findingStrength];
+  return manual * 100 + finding * 10 + (lead.pixelPresent === "yes" ? 3 : 0) + (lead.contactType === "owner" ? 2 : 0);
 }
 
 export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps) {
-  const { state, commit } = useCRM();
-  const analytics = useMemo(() => computeAnalytics(state), [state]);
-  const queue = useMemo(() => getQueue(state), [state]);
-  const from = todayStart().getTime();
-  const todayCalls = state.callAttempts.filter((attempt) => !attempt.voidedAt && new Date(attempt.occurredAt).getTime() >= from);
-  const todayMeetings = state.meetings.filter((meeting) => meeting.status === "booked" && new Date(meeting.scheduledAt).toDateString() === new Date().toDateString());
-  const todayWins = state.leads.filter((lead) => lead.status === "won" && new Date(lead.updatedAt).getTime() >= from).length;
-  const todayCallbacks = todayCalls.filter((call) => call.outcome === "callback" || call.outcome === "requested_callback").length;
-  const todayMeetingsBooked = state.meetings.filter((meeting) => new Date(meeting.createdAt).getTime() >= from).length;
-  const dailySeries = useMemo(() => buildDailySeries(state), [state]);
-  const seriesMax = Math.max(1, ...dailySeries.map((day) => day.calls));
-  const activeSession = [...state.sessions].reverse().find((session) => !session.endedAt);
-  const nowDate = new Date();
-  const greeting = nowDate.getHours() < 12 ? "Good morning" : nowDate.getHours() < 18 ? "Good afternoon" : "Good evening";
-  const operationsDay = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(nowDate);
+  const { state, commit, notify } = useCRM();
+  const [drawerLeadId, setDrawerLeadId] = useState<string | null>(null);
+  const from = startOfToday().getTime();
+  const through = endOfToday().getTime();
 
-  const pipeline = [
-    { label: "New", count: state.leads.filter((lead) => lead.status === "new").length, tone: "neutral" },
-    { label: "Active calls", count: state.leads.filter((lead) => ["retry_scheduled", "callback", "interested", "conversation_follow_up", "extended_retry"].includes(lead.status)).length, tone: "info" },
-    { label: "Meetings", count: state.leads.filter((lead) => ["meeting_booked", "second_meeting_booked"].includes(lead.status)).length, tone: "info" },
-    { label: "Decision", count: state.leads.filter((lead) => ["decision_pending", "proposal_sent", "post_meeting_follow_up"].includes(lead.status)).length, tone: "purple" },
-    { label: "Won", count: state.leads.filter((lead) => lead.status === "won").length, tone: "success" },
-    { label: "Lost", count: state.leads.filter((lead) => lead.status === "lost").length, tone: "neutral" },
-  ];
+  const todayCalls = state.callAttempts.filter((attempt) => !attempt.voidedAt && new Date(attempt.occurredAt).getTime() >= from);
+  const completed = todayCalls.length;
+  const target = Math.max(1, state.settings.calling.dailyCallGoal);
+  const remaining = Math.max(0, target - completed);
+  const meetings = state.meetings
+    .filter((meeting) => !meeting.voidedAt && meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() >= from && new Date(meeting.scheduledAt).getTime() <= through)
+    .sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
+
+  const plan = useMemo(() => {
+    const due = state.leads.flatMap<TodayItem>((lead) => {
+      const action = lead.nextAction;
+      if (!action?.queueEligible || action.queueClass === "non_call" || new Date(action.dueAt).getTime() > through || action.queueClass === "new_cold") return [];
+      const category = categoryFor(action.queueClass);
+      return [{ lead, category, priority: priorityFor(category) }];
+    }).sort((left, right) => {
+      const priority = left.priority - right.priority;
+      if (priority) return priority;
+      const time = (left.lead.nextAction?.dueAt ?? "").localeCompare(right.lead.nextAction?.dueAt ?? "");
+      return time || priorityWeight(right.lead) - priorityWeight(left.lead);
+    });
+
+    const freshNeeded = Math.max(0, target - completed - due.length);
+    const fresh = state.leads
+      .filter((lead) => lead.status === "new" && lead.nextAction?.queueEligible && lead.nextAction.queueClass === "new_cold")
+      .sort((left, right) => priorityWeight(right) - priorityWeight(left) || left.importedAt.localeCompare(right.importedAt))
+      .slice(0, freshNeeded)
+      .map<TodayItem>((lead) => ({ lead, category: "new", priority: 5 }));
+    return [...due, ...fresh];
+  }, [completed, state.leads, target, through]);
+
+  const counts = {
+    followUps: plan.filter((item) => item.category === "follow_up").length,
+    callbacks: plan.filter((item) => item.category === "callback").length,
+    retries: plan.filter((item) => item.category === "retry").length,
+    newCalls: plan.filter((item) => item.category === "new").length,
+  };
+  const activeSession = [...state.sessions].reverse().find((session) => !session.endedAt);
+  const firstWorkableLeadId = plan.find(({ lead, category }) =>
+    category === "new" || new Date(lead.nextAction?.dueAt ?? 0).getTime() <= Date.now(),
+  )?.lead.id;
 
   const start = () => {
     if (!activeSession) commit("Session started", (current) => startSession(current), "Calling session started");
     onStartCalling();
   };
 
+  const copy = async (value: string, label: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      notify(`${label} copied`, "success");
+    } catch {
+      notify(`Could not copy ${label.toLowerCase()}`, "danger");
+    }
+  };
+
   if (!state.leads.length) {
-    return (
-      <>
-        <PageHeader
-          eyebrow={`${operationsDay} operations`}
-          title={`${greeting}, Operator`}
-          description="Relay is ready for your first lead list. Import leads once, then let the queue organize every next action."
-          actions={<Button variant="primary" size="lg" onClick={() => onNavigate("import")} startIcon={<Icon name="plus" size={17} />}>Import your first leads</Button>}
-        />
-        <section className="panel dashboard-empty-state">
-          <EmptyState
-            icon={<Icon name="leads" size={28} />}
-            title="No leads yet"
-            description="Import a CSV or XLSX file to create your workspace. Your data stays on this computer and Relay will build the calling queue automatically."
-            action={<><Button variant="primary" onClick={() => onNavigate("import")}>Import lead list</Button><Button variant="secondary" onClick={() => onNavigate("settings")}>Review settings</Button></>}
-          />
-          <div className="empty-onboarding-grid" aria-label="Getting started">
-            <div><span>1</span><strong>Import</strong><small>Add your prepared lead list.</small></div>
-            <div><span>2</span><strong>Review</strong><small>Confirm calling hours and retry rules.</small></div>
-            <div><span>3</span><strong>Start calling</strong><small>Relay serves the next best lead.</small></div>
-          </div>
-        </section>
-      </>
-    );
+    return <>
+      <PageHeader eyebrow="Your daily workspace" title="Today" description="Import your lead list once. Relay will keep every lead organized from the first call through the final outcome." />
+      <section className="panel today-empty">
+        <EmptyState icon={<Icon name="leads" size={28} />} title="Import your first lead list" description="CSV and XLSX files stay on this computer. After import, Today will build the exact work queue for you." action={<Button variant="primary" onClick={() => onNavigate("import")} startIcon={<Icon name="upload" size={16} />}>Import leads</Button>} secondaryAction={<Button variant="secondary" onClick={() => onNavigate("settings")}>Set daily target</Button>} />
+      </section>
+    </>;
   }
 
-  return (
-    <>
-      <PageHeader
-        eyebrow={`${operationsDay} operations`}
-        title={`${greeting}, Operator`}
-        description="Your calling day is organized. Start with the highest-value work below."
-        actions={<Button variant="primary" size="lg" onClick={start} startIcon={<Icon name="play" size={17} />}>{activeSession ? "Resume calling" : "Start calling"}</Button>}
-      />
+  return <>
+    <PageHeader
+      eyebrow={formatDateTime(new Date(), { weekday: "long", month: "long", day: "numeric" })}
+      title="Today"
+      description="Everything needing attention today, in the order it should happen."
+      actions={<Button variant="primary" size="lg" onClick={start} disabled={!plan.length} startIcon={<Icon name="play" size={17} />}>{activeSession ? "Resume calling" : "Start calling"}</Button>}
+    />
 
-      <section className="goal-banner">
-        <div className="goal-banner__copy">
-          <span className="goal-banner__icon"><Icon name="target" size={20} /></span>
-          <div><span className="eyebrow">Daily call goal</span><strong>{todayCalls.length} <small>/ {state.settings.calling.dailyCallGoal} calls</small></strong></div>
-        </div>
-        <Progress value={todayCalls.length} max={state.settings.calling.dailyCallGoal} showValue valueLabel={`${Math.max(0, state.settings.calling.dailyCallGoal - todayCalls.length)} remaining`} size="lg" />
-        <div className="goal-banner__stats">
-          <span><strong>{todayCalls.filter((call) => call.meaningfulConversation).length}</strong> conversations</span>
-          <span><strong>{todayMeetingsBooked}</strong> meetings</span>
-          <span><strong>{todayCallbacks}</strong> callbacks</span>
-        </div>
-      </section>
-
-      <section className="metric-grid metric-grid--five" aria-label="Today's metrics">
-        <MetricCard label="Calls made" value={todayCalls.length} icon={<Icon name="phone" size={18} />} hint="Today" tone="accent" />
-        <MetricCard label="Conversations" value={todayCalls.filter((call) => call.meaningfulConversation).length} icon={<Icon name="activity" size={18} />} hint={formatPercent(todayCalls.length ? todayCalls.filter((call) => call.meaningfulConversation).length / todayCalls.length * 100 : 0)} />
-        <MetricCard label="Callbacks" value={todayCallbacks} icon={<Icon name="callback" size={18} />} hint="Scheduled today" />
-        <MetricCard label="Meetings booked" value={todayMeetingsBooked} icon={<Icon name="calendar" size={18} />} hint={`${todayMeetings.length} on calendar today`} />
-        <MetricCard label="Clients won" value={todayWins} icon={<Icon name="won" size={18} />} hint="Today" tone="success" />
-      </section>
-
-      <div className="dashboard-grid dashboard-grid--primary">
-        <section className="panel next-work-panel">
-          <div className="panel__header"><div><span className="eyebrow">Priority desk</span><h2>Next work</h2></div><Badge tone={queue.length ? "accent" : "neutral"} dot>{queue.length} ready now</Badge></div>
-          <div className="work-list">
-            {[
-              { key: "exact_callback", label: "Exact callbacks", icon: "callback", route: "callbacks" as Route },
-              { key: "post_meeting_follow_up", label: "Post-meeting follow-ups", icon: "followUp", route: "follow-ups" as Route },
-              { key: "interested_follow_up", label: "Interested follow-ups", icon: "activity", route: "follow-ups" as Route },
-              { key: "cold_retry", label: "Cold retries", icon: "recycle", route: "queue" as Route },
-              { key: "new_cold", label: "New leads", icon: "leads", route: "leads" as Route },
-            ].map((item) => {
-              const matches = queue.filter((candidate) => candidate.action.queueClass === item.key);
-              return (
-                <button className="work-list__item" key={item.key} onClick={() => onNavigate(item.route)}>
-                  <span className="work-list__icon"><Icon name={item.icon} size={18} /></span>
-                  <span><strong>{item.label}</strong><small>{matches[0]?.lead.clinicName ?? "Nothing due"}</small></span>
-                  <b>{matches.length}</b><Icon name="chevronRight" size={16} />
-                </button>
-              );
-            })}
-          </div>
-          <Button variant="primary" fullWidth onClick={start} disabled={!queue.length} startIcon={<Icon name="phone" size={17} />}>
-            {queue.length ? `Call next — ${queue[0].lead.clinicName}` : "No calls eligible right now"}
-          </Button>
-        </section>
-
-        <section className="panel pipeline-panel">
-          <div className="panel__header"><div><span className="eyebrow">All-time</span><h2>Pipeline health</h2></div><Button variant="ghost" size="sm" onClick={() => onNavigate("analytics")}>View analytics <Icon name="arrowRight" size={14} /></Button></div>
-          <div className="pipeline-stack">
-            {pipeline.map((item) => (
-              <div className="pipeline-row" key={item.label}>
-                <span className={`pipeline-row__dot is-${item.tone}`} />
-                <span>{item.label}</span><strong>{formatNumber(item.count)}</strong>
-                <div className="pipeline-row__bar"><i style={{ width: `${Math.max(4, item.count / Math.max(1, state.leads.length) * 100)}%` }} /></div>
-              </div>
-            ))}
-          </div>
-          <div className="pipeline-footer"><span><Icon name="recycle" size={15} /> {state.leads.filter((lead) => lead.status === "recycle_later").length} in recycle</span><span><Icon name="followUp" size={15} /> {state.leads.filter((lead) => lead.pipelineStage === "post_meeting" && !["won", "lost"].includes(lead.status)).length} warm opportunities</span></div>
-        </section>
+    <section className="today-summary panel">
+      <div className="today-goal">
+        <div><span className="eyebrow">Calls completed</span><strong>{completed} <small>/ {target}</small></strong><p>{remaining} remaining today</p></div>
+        <Progress value={completed} max={target} size="lg" tone={completed >= target ? "success" : "accent"} />
       </div>
-
-      <div className="dashboard-grid dashboard-grid--secondary">
-        <section className="panel chart-panel">
-          <div className="panel__header"><div><span className="eyebrow">Last 7 days</span><h2>Calling momentum</h2></div><div className="chart-legend"><span className="is-calls">Calls</span><span className="is-conversations">Conversations</span></div></div>
-          <div className="bar-chart" aria-label="Calls and conversations over seven days">
-            {dailySeries.map((day) => (
-              <div className="bar-chart__day" key={day.label}>
-                <div className="bar-chart__bars">
-                  <i className="is-calls" style={{ height: `${day.calls / seriesMax * 100}%` }} title={`${day.calls} calls`} />
-                  <i className="is-conversations" style={{ height: `${day.conversations / seriesMax * 100}%` }} title={`${day.conversations} conversations`} />
-                </div>
-                <strong>{day.calls}</strong><span>{day.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="chart-summary">
-            <span><strong>{formatNumber(analytics.totalDials)}</strong> all-time dials</span>
-            <span><strong>{formatPercent(analytics.answerRate)}</strong> answer rate</span>
-            <span><strong>{formatPercent(analytics.dialToMeetingRate)}</strong> dial → meeting</span>
-          </div>
-        </section>
-
-        <section className="panel activity-panel">
-          <div className="panel__header"><div><span className="eyebrow">Live log</span><h2>Recent activity</h2></div><Icon name="activity" size={18} /></div>
-          <div className="activity-list activity-list--compact">
-            {[...state.activities].filter((activity) => !activity.voidedAt).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 6).map((activity) => {
-              const lead = activity.leadId ? state.leads.find((item) => item.id === activity.leadId) : null;
-              return (
-                <div className="activity-item" key={activity.id}>
-                  <span className="activity-item__icon"><Icon name={activity.type.includes("meeting") ? "calendar" : activity.type.includes("call") ? "phone" : "activity"} size={15} /></span>
-                  <div><strong>{activity.title}</strong><small>{lead?.clinicName ?? activity.note}</small></div>
-                  <time>{formatDateTime(activity.occurredAt, { hour: "numeric", minute: "2-digit" })}</time>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+      <div className="today-counts" aria-label="Today's planned work">
+        <SummaryCount label="Meetings" value={meetings.length} icon="calendar" tone="meeting" />
+        <SummaryCount label="Follow-Ups" value={counts.followUps} icon="followUp" tone="follow" />
+        <SummaryCount label="Callbacks" value={counts.callbacks} icon="callback" tone="callback" />
+        <SummaryCount label="Retries" value={counts.retries} icon="refresh" tone="retry" />
+        <SummaryCount label="New Calls" value={counts.newCalls} icon="leads" tone="new" />
       </div>
+    </section>
 
-      {todayMeetings.length ? (
-        <section className="panel meetings-strip">
-          <div className="panel__header"><div><span className="eyebrow">Calendar</span><h2>Meetings today</h2></div><Button variant="ghost" size="sm" onClick={() => onNavigate("meetings")}>See all</Button></div>
-          <div className="meeting-mini-grid">
-            {todayMeetings.slice(0, 3).map((meeting) => {
-              const lead = state.leads.find((item) => item.id === meeting.leadId);
-              return <button key={meeting.id} onClick={() => onNavigate("meetings")}><time>{formatDateTime(meeting.scheduledAt, { hour: "numeric", minute: "2-digit" })}</time><span><strong>{lead?.clinicName}</strong><small>{lead?.decisionMakerName} · {meeting.meetingType}</small></span><Badge tone={STATUS_TONES[lead?.status ?? "new"] as "info"}>{lead ? STATUS_LABELS[lead.status] : "Booked"}</Badge></button>;
-            })}
-          </div>
-        </section>
-      ) : null}
-    </>
-  );
+    {meetings.length ? <section className="panel today-meetings">
+      <div className="panel__header"><div><span className="eyebrow">Priority 1</span><h2>Meetings today</h2></div><Button variant="ghost" size="sm" onClick={() => onNavigate("meetings")}>View meetings</Button></div>
+      <div className="today-meeting-list">{meetings.map((meeting) => {
+        const lead = state.leads.find((item) => item.id === meeting.leadId);
+        if (!lead) return null;
+        return <button key={meeting.id} onClick={() => setDrawerLeadId(lead.id)}>
+          <time>{formatDateTime(meeting.scheduledAt, { hour: "numeric", minute: "2-digit" })}</time>
+          <span><strong>{lead.clinicName}</strong><small>{lead.decisionMakerName || "Decision maker not recorded"} · {meeting.meetingType}</small></span>
+          <Badge tone="info">{meeting.durationMinutes} min</Badge><Icon name="chevronRight" size={16} />
+        </button>;
+      })}</div>
+    </section> : null}
+
+    <section className="panel today-queue">
+      <div className="panel__header"><div><span className="eyebrow">Priorities 2–5</span><h2>Today’s call queue</h2><p>Scheduled work first, then enough new leads to fill the daily target.</p></div><Badge tone={plan.length ? "accent" : "success"} dot>{plan.length} remaining</Badge></div>
+      {plan.length ? <div className="table-wrap"><table className="data-table today-table">
+        <thead><tr><th>Priority</th><th>Clinic</th><th>Decision-maker</th><th>Phone</th><th>Stage</th><th>Attempt / touch</th><th>When</th><th>Pixel / finding</th><th>Quick actions</th></tr></thead>
+        <tbody>{plan.map(({ lead, category, priority }) => {
+          const phone = lead.directPhone || lead.mobilePhone;
+          const overdue = category !== "new" && !!lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < from;
+          const workNext = lead.id === firstWorkableLeadId;
+          return <tr key={lead.id} className={cn(overdue && "is-overdue")}>
+            <td data-label="Priority"><span className={`queue-priority queue-priority--${priority}`}>P{priority}</span><small>{category === "follow_up" ? "Follow-up" : category === "callback" ? "Callback" : category === "retry" ? "Retry" : "New"}</small></td>
+            <td data-label="Clinic"><button className="table-primary-link" onClick={() => setDrawerLeadId(lead.id)}>{lead.clinicName}</button><small>{[lead.city, lead.state].filter(Boolean).join(", ") || "Location not recorded"}</small></td>
+            <td data-label="Decision-maker"><strong>{lead.decisionMakerName || "Not recorded"}</strong><small>{lead.decisionMakerRole || "Role not recorded"}</small></td>
+            <td data-label="Phone"><button className="copy-value" onClick={() => void copy(phone, "Phone number")} disabled={!phone}><Icon name="copy" size={13} />{phone || "No number"}</button>{lead.mobilePhone && lead.mobilePhone !== phone ? <small>{lead.mobilePhone}</small> : null}</td>
+            <td data-label="Stage"><Badge tone={STATUS_TONES[lead.status] as "info"} size="sm">{stageFor(lead)}</Badge><small>{STATUS_LABELS[lead.status]}</small></td>
+            <td data-label="Attempt">{lead.pipelineStage === "post_meeting" ? <strong>Touch {lead.postMeetingTouchCount} / {state.settings.followUp.maximumPostMeetingTouches}</strong> : <strong>Attempt {lead.coldNoAnswerCount} / {state.settings.calling.maximumInitialAttempts}</strong>}</td>
+            <td data-label="When"><strong className={cn(overdue && "text-danger")}>{category === "new" ? "Any time" : formatDateTime(lead.nextAction?.dueAt, { hour: "numeric", minute: "2-digit" })}</strong><small>{overdue ? "Overdue" : lead.nextAction?.exact ? "Scheduled" : "Due today"}</small></td>
+            <td data-label="Finding"><Badge tone={lead.pixelPresent === "yes" ? "purple" : "neutral"} size="sm">Pixel: {lead.pixelPresent}</Badge><small>{lead.primaryFinding || `Finding ${lead.findingStrength}`}</small></td>
+            <td data-label="Actions"><div className="row-actions"><Button variant="ghost" size="sm" onClick={() => void copy(lead.websiteUrl, "Website")} disabled={!lead.websiteUrl}>Copy site</Button><Button variant={workNext ? "primary" : "secondary"} size="sm" onClick={workNext ? start : () => setDrawerLeadId(lead.id)}>{workNext ? "Work next" : "Open"}</Button></div></td>
+          </tr>;
+        })}</tbody>
+      </table></div> : <EmptyState compact icon={<Icon name="checkCircle" size={26} />} title="Today is clear" description={completed >= target ? "You reached today’s calling target. Future scheduled work remains safely queued." : "No callable leads are due. Import more leads or review records missing a phone number."} action={completed < target ? <Button variant="primary" onClick={() => onNavigate("import")}>Import leads</Button> : undefined} />}
+    </section>
+
+    <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
+  </>;
+}
+
+function SummaryCount({ label, value, icon, tone }: { label: string; value: number; icon: string; tone: string }) {
+  return <div className={`today-count today-count--${tone}`}><span><Icon name={icon} size={17} /></span><div><strong>{value}</strong><small>{label}</small></div></div>;
 }

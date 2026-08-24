@@ -3,56 +3,86 @@ import { Icon } from "../components/Icon";
 import { LeadDrawer } from "../components/LeadDrawer";
 import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/UI";
 import { useCRM } from "../data/store";
-import { completeMeeting } from "../domain/engine";
+import { completeMeeting, updateMeetingStatus } from "../domain/engine";
 import { downloadExport } from "../domain/files";
-import { LOST_REASONS, MEETING_OUTCOME_LABELS } from "../lib/constants";
-import { cn, formatDateTime, phoneHref, toLocalInputValue } from "../lib/format";
+import { LOST_REASONS } from "../lib/constants";
+import { cn, formatDateTime, toLocalInputValue } from "../lib/format";
 import type { Meeting, MeetingOutcome } from "../types";
 
-type MeetingTab = "today" | "upcoming" | "completed" | "follow_up" | "won" | "lost";
+type MeetingView = "today" | "upcoming" | "past" | "reschedule" | "no_show" | "completed";
+
+function beginningOfToday() { const date = new Date(); date.setHours(0, 0, 0, 0); return date; }
+function endOfToday() { const date = new Date(); date.setHours(23, 59, 59, 999); return date; }
 
 export function MeetingsPage() {
   const { state, commit, notify } = useCRM();
-  const [tab, setTab] = useState<MeetingTab>("today");
-  const [completingId, setCompletingId] = useState<string | null>(null);
+  const [view, setView] = useState<MeetingView>("today");
   const [drawerLeadId, setDrawerLeadId] = useState<string | null>(null);
-  const today = new Date().toDateString();
+  const [completingId, setCompletingId] = useState<string | null>(null);
+  const [reschedulingId, setReschedulingId] = useState<string | null>(null);
+  const from = beginningOfToday().getTime();
+  const through = endOfToday().getTime();
+
   const groups = useMemo(() => ({
-    today: state.meetings.filter((meeting) => meeting.status === "booked" && new Date(meeting.scheduledAt).toDateString() === today),
-    upcoming: state.meetings.filter((meeting) => meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() > Date.now() && new Date(meeting.scheduledAt).toDateString() !== today),
-    completed: state.meetings.filter((meeting) => meeting.status === "completed"),
-    follow_up: state.meetings.filter((meeting) => meeting.status === "completed" && meeting.outcome && !["won", "lost"].includes(meeting.outcome)),
-    won: state.meetings.filter((meeting) => meeting.status === "completed" && meeting.outcome === "won"),
-    lost: state.meetings.filter((meeting) => meeting.status === "completed" && meeting.outcome === "lost"),
-  }), [state.meetings, today]);
-  const meetings = groups[tab].sort((a, b) => tab === "completed" ? b.scheduledAt.localeCompare(a.scheduledAt) : a.scheduledAt.localeCompare(b.scheduledAt));
+    today: state.meetings.filter((meeting) => !meeting.voidedAt && meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() >= from && new Date(meeting.scheduledAt).getTime() <= through),
+    upcoming: state.meetings.filter((meeting) => !meeting.voidedAt && meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() > through),
+    past: state.meetings.filter((meeting) => !meeting.voidedAt && meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() < from),
+    reschedule: state.meetings.filter((meeting) => !meeting.voidedAt && (meeting.status === "reschedule_needed" || meeting.status === "cancelled")),
+    no_show: state.meetings.filter((meeting) => !meeting.voidedAt && meeting.status === "no_show"),
+    completed: state.meetings.filter((meeting) => !meeting.voidedAt && meeting.status === "completed"),
+  }), [from, state.meetings, through]);
+  const meetings = [...groups[view]].sort((left, right) => view === "completed" || view === "past" ? right.scheduledAt.localeCompare(left.scheduledAt) : left.scheduledAt.localeCompare(right.scheduledAt));
+  const tabs: Array<{ id: MeetingView; label: string }> = [
+    { id: "today", label: "Today" }, { id: "upcoming", label: "Upcoming" }, { id: "past", label: "Past" },
+    { id: "reschedule", label: "Reschedule Needed" }, { id: "no_show", label: "No Show" }, { id: "completed", label: "Completed" },
+  ];
 
   return <>
-    <PageHeader eyebrow="Meeting pipeline" title="Meetings" description="Booked meetings stay visible until a required sales outcome moves the opportunity forward." actions={<Button variant="secondary" onClick={() => void downloadExport({ kind: "meetings", format: "xlsx", state }).then((fileName) => notify(`${fileName} downloaded`, "success")).catch(() => notify("Meeting export failed", "danger"))} startIcon={<Icon name="download" size={16} />}>Export meetings</Button>} />
-    <section className="panel meetings-panel">
-      <div className="collection-toolbar"><div className="tabs tabs--wrap">{(["today", "upcoming", "completed", "follow_up", "won", "lost"] as MeetingTab[]).map((item) => <button key={item} className={tab === item ? "is-active" : ""} onClick={() => setTab(item)}>{item === "follow_up" ? "Follow-up required" : item[0].toUpperCase() + item.slice(1)} <span>{groups[item].length}</span></button>)}</div></div>
-      {meetings.length ? <div className="meeting-card-grid">{meetings.map((meeting) => {
+    <PageHeader eyebrow="Scheduled conversations" title="Meetings" description="Upcoming and unresolved meetings stay visible until you record what happened." actions={<Button variant="secondary" onClick={() => void downloadExport({ kind: "meetings", format: "xlsx", state }).then((name) => notify(`${name} downloaded`, "success")).catch(() => notify("Meeting export failed", "danger"))} startIcon={<Icon name="download" size={16} />}>Export meetings</Button>} />
+    <section className="panel meetings-panel meetings-panel--simple">
+      <div className="collection-toolbar"><div className="filter-chips">{tabs.map((tab) => <button key={tab.id} className={view === tab.id ? "is-active" : ""} onClick={() => setView(tab.id)}>{tab.label}<span>{groups[tab.id].length}</span></button>)}</div></div>
+      {meetings.length ? <div className="meeting-list">{meetings.map((meeting) => {
         const lead = state.leads.find((item) => item.id === meeting.leadId);
         if (!lead) return null;
-        return <article className="meeting-card" key={meeting.id}><div className="meeting-card__time"><span><strong>{formatDateTime(meeting.scheduledAt, { month: "short", day: "numeric" })}</strong><small>{formatDateTime(meeting.scheduledAt, { hour: "numeric", minute: "2-digit" })}</small></span><Badge tone={meeting.status === "completed" ? meeting.outcome === "won" ? "success" : meeting.outcome === "lost" ? "neutral" : "purple" : "info"} dot>{meeting.status === "completed" ? MEETING_OUTCOME_LABELS[meeting.outcome!] : meeting.status}</Badge></div><div className="meeting-card__identity"><span className="lead-avatar">{lead.clinicName.slice(0, 2).toUpperCase()}</span><div><h3>{lead.clinicName}</h3><p>{lead.decisionMakerName} · {lead.decisionMakerRole}</p></div></div><div className="meeting-card__context"><div><small>Primary finding</small><strong>{lead.primaryFinding || "No finding recorded"}</strong></div><div><small>Original call notes</small><p>{lead.lastConversationNotes || "No prior notes"}</p></div>{meeting.notes ? <div><small>Meeting notes</small><p>{meeting.notes}</p></div> : null}</div><div className="meeting-card__contact"><a href={phoneHref(lead.directPhone || lead.mobilePhone)}><Icon name="phone" size={14} /> {lead.directPhone || lead.mobilePhone}</a><a href={lead.email ? `mailto:${lead.email}` : undefined}><Icon name="mail" size={14} /> {lead.email || "No email"}</a><span><Icon name="timer" size={14} /> {meeting.durationMinutes} min · {meeting.meetingType}</span></div><footer><Button variant="ghost" size="sm" onClick={() => setDrawerLeadId(lead.id)}>View lead</Button>{meeting.status === "booked" ? <Button variant="primary" size="sm" onClick={() => setCompletingId(meeting.id)} startIcon={<Icon name="checkCircle" size={15} />}>Mark completed</Button> : meeting.outcome && !["won", "lost"].includes(meeting.outcome) ? <Badge tone="purple">Touches {lead.postMeetingTouchCount} / {state.settings.followUp.maximumPostMeetingTouches}</Badge> : null}</footer></article>;
-      })}</div> : <EmptyState icon={<Icon name="calendar" size={28} />} title={tab === "today" ? "No meetings today" : tab === "follow_up" ? "No meetings need follow-up" : `No ${tab.replace("_", " ")} meetings`} description={tab === "today" ? "Meetings scheduled for today appear here with the full calling context." : "Meeting records move here automatically as their status changes."} />}
+        const overdue = meeting.status === "booked" && new Date(meeting.scheduledAt).getTime() < Date.now();
+        return <article className={cn("meeting-row", overdue && "is-overdue")} key={meeting.id}>
+          <div className="meeting-row__time"><strong>{formatDateTime(meeting.scheduledAt, { month: "short", day: "numeric" })}</strong><span>{formatDateTime(meeting.scheduledAt, { hour: "numeric", minute: "2-digit" })}</span></div>
+          <div className="meeting-row__lead"><button className="table-primary-link" onClick={() => setDrawerLeadId(lead.id)}>{lead.clinicName}</button><small>{lead.decisionMakerName || "Decision maker not recorded"} · {lead.decisionMakerRole || "Role not recorded"}</small></div>
+          <div><small>Meeting</small><strong>{meeting.meetingType}</strong><span>{meeting.durationMinutes} minutes</span></div>
+          <div><small>Context</small><strong>{lead.primaryFinding || "No finding recorded"}</strong><span>{meeting.notes || lead.lastConversationNotes || "No notes"}</span></div>
+          <Badge tone={meeting.status === "completed" ? meeting.outcome === "won" ? "success" : meeting.outcome === "lost" ? "neutral" : "purple" : meeting.status === "no_show" || meeting.status === "reschedule_needed" ? "warning" : overdue ? "danger" : "info"} dot>{meeting.status === "completed" ? (meeting.outcome ?? "completed").replaceAll("_", " ") : meeting.status.replaceAll("_", " ")}</Badge>
+          <div className="row-actions"><Button variant="ghost" size="sm" onClick={() => setDrawerLeadId(lead.id)}>View lead</Button>{meeting.status === "booked" ? <><Button variant="secondary" size="sm" onClick={() => setReschedulingId(meeting.id)}>Reschedule</Button><Button variant="quiet" size="sm" onClick={() => commit("Meeting marked no-show", (current) => updateMeetingStatus(current, meeting.id, "no_show"), "No-show recorded; follow-up added to Today")}>No Show</Button><Button variant="primary" size="sm" onClick={() => setCompletingId(meeting.id)}>Complete</Button></> : meeting.status === "reschedule_needed" || meeting.status === "cancelled" ? <Button variant="primary" size="sm" onClick={() => setReschedulingId(meeting.id)}>Set new time</Button> : null}</div>
+        </article>;
+      })}</div> : <EmptyState icon={<Icon name="calendar" size={27} />} title={view === "today" ? "No meetings today" : `No ${tabs.find((tab) => tab.id === view)?.label.toLowerCase()} meetings`} description="Meetings move between these views automatically as you record outcomes." />}
     </section>
-    <CompleteMeetingModal meeting={state.meetings.find((meeting) => meeting.id === completingId) ?? null} onClose={() => setCompletingId(null)} onSubmit={(meeting, input) => { commit("Meeting completed", (current) => completeMeeting(current, meeting.id, input), input.outcome === "won" ? "Client won" : input.outcome === "lost" ? "Meeting closed as lost" : "Post-meeting follow-up started"); setCompletingId(null); }} />
+
+    <CompleteMeetingModal meeting={state.meetings.find((meeting) => meeting.id === completingId) ?? null} onClose={() => setCompletingId(null)} onSubmit={(meeting, input) => { commit("Meeting completed", (current) => completeMeeting(current, meeting.id, input), input.outcome === "won" ? "Client won" : input.outcome === "lost" ? "Meeting marked lost" : "Five-touch follow-up started"); setCompletingId(null); }} />
+    <RescheduleModal key={reschedulingId ?? "none"} meeting={state.meetings.find((meeting) => meeting.id === reschedulingId) ?? null} onClose={() => setReschedulingId(null)} onSubmit={(meeting, scheduledAt, note) => { commit("Meeting rescheduled", (current) => updateMeetingStatus(current, meeting.id, "booked", { scheduledAt, note }), "Meeting rescheduled"); setReschedulingId(null); }} onNeedsDate={(meeting, note) => { commit("Meeting needs rescheduling", (current) => updateMeetingStatus(current, meeting.id, "reschedule_needed", { note }), "Meeting moved to Reschedule Needed"); setReschedulingId(null); }} />
     <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
   </>;
 }
 
-function CompleteMeetingModal({ meeting, onClose, onSubmit }: { meeting: Meeting | null; onClose: () => void; onSubmit: (meeting: Meeting, input: { outcome: MeetingOutcome; note?: string; nextAt?: string; secondMeetingAt?: string; secondMeetingType?: string; lostReason?: string; interestSummary?: string; mainObjection?: string; decisionStatus?: string }) => void }) {
-  const [outcome, setOutcome] = useState<MeetingOutcome | "">("");
+function CompleteMeetingModal({ meeting, onClose, onSubmit }: { meeting: Meeting | null; onClose: () => void; onSubmit: (meeting: Meeting, input: { outcome: MeetingOutcome; note?: string; nextAt?: string; lostReason?: string; interestSummary?: string; mainObjection?: string; decisionStatus?: string }) => void }) {
+  const [outcome, setOutcome] = useState<"won" | "lost" | "follow_up_needed" | "">("");
   const [note, setNote] = useState("");
   const [interest, setInterest] = useState("");
   const [objection, setObjection] = useState("");
-  const [decision, setDecision] = useState("");
-  const [nextAt, setNextAt] = useState(() => { const date = new Date(); date.setDate(date.getDate() + 1); date.setHours(10, 0, 0, 0); return toLocalInputValue(date); });
   const [lostReason, setLostReason] = useState("");
+  const [nextAt, setNextAt] = useState(nextBusinessMorning());
   if (!meeting) return null;
-  const needsNext = outcome && !["won", "lost"].includes(outcome);
-  return <Modal open onClose={onClose} title="Complete meeting" description="A completed meeting must have a disposition. No-decision outcomes start the post-meeting sequence automatically." size="lg" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant={outcome === "won" ? "success" : outcome === "lost" ? "secondary" : "primary"} disabled={!outcome || (!!needsNext && !nextAt)} onClick={() => onSubmit(meeting, { outcome: outcome as MeetingOutcome, note, nextAt: needsNext ? new Date(nextAt).toISOString() : undefined, secondMeetingAt: outcome === "second_meeting_needed" ? new Date(nextAt).toISOString() : undefined, secondMeetingType: "Video call", lostReason, interestSummary: interest, mainObjection: objection, decisionStatus: decision || MEETING_OUTCOME_LABELS[outcome as MeetingOutcome] })}>Complete & continue</Button></>}>
-    <div className="meeting-outcome-form"><span className="field-label">Required outcome</span><div className="outcome-choice-grid">{(Object.keys(MEETING_OUTCOME_LABELS) as MeetingOutcome[]).map((value) => <button key={value} className={cn(outcome === value && "is-selected", value === "won" && "is-success", value === "lost" && "is-danger")} onClick={() => setOutcome(value)}><Icon name={value === "won" ? "won" : value === "lost" ? "lost" : value === "second_meeting_needed" ? "calendar" : value === "proposal_sent" ? "file" : "followUp"} size={18} /><span>{MEETING_OUTCOME_LABELS[value]}</span><i /></button>)}</div><div className="form-grid"><label className="field"><span>What interested them?</span><input value={interest} onChange={(event) => setInterest(event.target.value)} placeholder="Compliance, patient privacy…" /></label><label className="field"><span>Main objection</span><input value={objection} onChange={(event) => setObjection(event.target.value)} placeholder="Budget, approval, timing…" /></label><label className="field"><span>Decision status</span><input value={decision} onChange={(event) => setDecision(event.target.value)} placeholder="Owner reviewing proposal" /></label>{needsNext ? <label className="field"><span>{outcome === "second_meeting_needed" ? "Second meeting date" : "First follow-up date"}</span><input type="datetime-local" value={nextAt} onChange={(event) => setNextAt(event.target.value)} /></label> : null}{outcome === "lost" ? <label className="field"><span>Lost reason</span><select value={lostReason} onChange={(event) => setLostReason(event.target.value)}><option value="">No reason selected</option>{LOST_REASONS.map((reason) => <option key={reason}>{reason}</option>)}</select></label> : null}<label className="field field--full"><span>Meeting notes</span><textarea rows={4} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Decision process, stakeholders, requested materials…" /></label></div></div>
+  const startFollowUp = outcome === "follow_up_needed";
+  return <Modal open onClose={onClose} title="Complete meeting" description="Choose the result. If there is no final decision, start the five-touch follow-up and choose its first due date." size="lg" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant={outcome === "won" ? "success" : "primary"} disabled={!outcome || (startFollowUp && !nextAt)} onClick={() => onSubmit(meeting, { outcome: outcome as MeetingOutcome, note, nextAt: startFollowUp ? new Date(nextAt).toISOString() : undefined, lostReason, interestSummary: interest, mainObjection: objection, decisionStatus: outcome === "won" ? "Won" : outcome === "lost" ? "Lost" : "Follow-up active" })}>Complete meeting</Button></>}>
+    <div className="form-stack"><div className="meeting-result-choices"><button className={outcome === "won" ? "is-selected is-success" : ""} onClick={() => setOutcome("won")}><Icon name="won" size={18} /><strong>Won</strong></button><button className={outcome === "lost" ? "is-selected" : ""} onClick={() => setOutcome("lost")}><Icon name="lost" size={18} /><strong>Lost</strong></button><button className={outcome === "follow_up_needed" ? "is-selected" : ""} onClick={() => setOutcome("follow_up_needed")}><Icon name="followUp" size={18} /><strong>Start Follow-Up Sequence</strong></button></div>
+      <div className="form-grid"><label className="field"><span>What interested them?</span><input value={interest} onChange={(event) => setInterest(event.target.value)} /></label><label className="field"><span>Main objection</span><input value={objection} onChange={(event) => setObjection(event.target.value)} /></label>{startFollowUp ? <label className="field"><span>Touch 1 due date and time</span><input type="datetime-local" value={nextAt} onChange={(event) => setNextAt(event.target.value)} /></label> : null}{outcome === "lost" ? <label className="field"><span>Lost reason</span><select value={lostReason} onChange={(event) => setLostReason(event.target.value)}><option value="">No reason selected</option>{LOST_REASONS.map((reason) => <option key={reason}>{reason}</option>)}</select></label> : null}<label className="field field--full"><span>Meeting notes</span><textarea rows={4} value={note} onChange={(event) => setNote(event.target.value)} /></label></div>
+    </div>
   </Modal>;
 }
+
+function RescheduleModal({ meeting, onClose, onSubmit, onNeedsDate }: { meeting: Meeting | null; onClose: () => void; onSubmit: (meeting: Meeting, scheduledAt: string, note: string) => void; onNeedsDate: (meeting: Meeting, note: string) => void }) {
+  const [date, setDate] = useState(() => meeting ? toLocalInputValue(meeting.scheduledAt) : nextBusinessMorning());
+  const [note, setNote] = useState("");
+  if (!meeting) return null;
+  return <Modal open onClose={onClose} title="Reschedule meeting" description="Set the agreed time now, or place it in Reschedule Needed until the prospect confirms." size="sm" footer={<><Button variant="ghost" onClick={() => onNeedsDate(meeting, note)}>Date not known yet</Button><Button variant="primary" disabled={!date} onClick={() => onSubmit(meeting, new Date(date).toISOString(), note)}>Save new time</Button></>}><div className="form-stack"><label className="field"><span>New date and time</span><input type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label><label className="field"><span>Note <small>Optional</small></span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label></div></Modal>;
+}
+
+function nextBusinessMorning() { const date = new Date(); date.setDate(date.getDate() + 1); while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + 1); date.setHours(10, 0, 0, 0); return toLocalInputValue(date); }

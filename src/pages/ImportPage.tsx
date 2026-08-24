@@ -15,20 +15,21 @@ import type { CRMState, Lead, LeadImportInput } from "../types";
 
 const IMPORT_STEPS = [
   { title: "Upload", hint: "CSV or XLSX" },
+  { title: "Preview", hint: "Check the file" },
   { title: "Map Columns", hint: "Match your fields" },
   { title: "Resolve Duplicates", hint: "Never delete silently" },
   { title: "Review", hint: "Confirm the batch" },
   { title: "Results", hint: "Import summary" },
 ] as const;
 
-type DuplicateDecision = "unresolved" | "merge" | "keep" | "skip";
+type DuplicateDecision = "unresolved" | "merge" | "replace" | "keep" | "skip";
 
 interface ImportResult {
   batchId: string;
   batchName: string;
   source: string;
   imported: number;
-  merged: number;
+  updated: number;
   skipped: number;
   duplicates: number;
   rejected: number;
@@ -38,24 +39,28 @@ interface ImportPageProps {
   onViewLeads?: () => void;
 }
 
-function mergeLeadInputs(base: LeadImportInput, incoming: LeadImportInput): LeadImportInput {
+function mergeLeadInputs(base: LeadImportInput, incoming: LeadImportInput, mode: "merge" | "replace"): LeadImportInput {
   const merged = { ...base } as LeadImportInput & Record<string, unknown>;
   for (const [key, value] of Object.entries(incoming)) {
     if (Array.isArray(value)) {
       const prior = Array.isArray(merged[key]) ? merged[key] as string[] : [];
       merged[key] = [...new Set([...prior, ...value].filter(Boolean))];
     } else if (typeof value === "string") {
-      if (value.trim()) merged[key] = value.trim();
+      if (value.trim() && (mode === "replace" || !String(merged[key] ?? "").trim())) merged[key] = value.trim();
+    } else if (key === "customFields" && value && typeof value === "object") {
+      merged[key] = mode === "replace"
+        ? { ...((merged[key] as Record<string, string>) ?? {}), ...(value as Record<string, string>) }
+        : { ...(value as Record<string, string>), ...((merged[key] as Record<string, string>) ?? {}) };
     } else if (value !== undefined) {
       merged[key] = value;
     }
   }
-  merged.clinicName = incoming.clinicName.trim() || base.clinicName;
+  merged.clinicName = mode === "replace" ? incoming.clinicName.trim() || base.clinicName : base.clinicName;
   merged.researchCompleted = Boolean(base.researchCompleted || incoming.researchCompleted);
   return merged;
 }
 
-function mergeImportIntoLead(state: CRMState, leadId: string, input: LeadImportInput): CRMState {
+function mergeImportIntoLead(state: CRMState, leadId: string, input: LeadImportInput, mode: "merge" | "replace"): CRMState {
   const existing = state.leads.find((lead) => lead.id === leadId);
   if (!existing) return state;
   const patch: LeadPatch = {};
@@ -73,7 +78,7 @@ function mergeImportIntoLead(state: CRMState, leadId: string, input: LeadImportI
   ];
   for (const field of stringFields) {
     const value = input[field];
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === "string" && value.trim() && (mode === "replace" || !existing[field].trim())) {
       (patch as Record<string, unknown>)[field] = value.trim();
     }
   }
@@ -83,18 +88,19 @@ function mergeImportIntoLead(state: CRMState, leadId: string, input: LeadImportI
   if (input.trackingTechnologies?.length) {
     patch.trackingTechnologies = [...new Set([...existing.trackingTechnologies, ...input.trackingTechnologies])];
   }
-  if (input.contactType && input.contactType !== "unknown") patch.contactType = input.contactType;
-  if (input.pixelPresent && input.pixelPresent !== "unknown") patch.pixelPresent = input.pixelPresent;
-  if (input.findingStrength && input.findingStrength !== "unknown") patch.findingStrength = input.findingStrength;
-  if (input.priority) patch.priority = input.priority;
+  if (input.contactType && input.contactType !== "unknown" && (mode === "replace" || existing.contactType === "unknown")) patch.contactType = input.contactType;
+  if (input.pixelPresent && input.pixelPresent !== "unknown" && (mode === "replace" || existing.pixelPresent === "unknown")) patch.pixelPresent = input.pixelPresent;
+  if (input.findingStrength && input.findingStrength !== "unknown" && (mode === "replace" || existing.findingStrength === "unknown")) patch.findingStrength = input.findingStrength;
+  if (input.priority && (mode === "replace" || existing.priority === "normal")) patch.priority = input.priority;
   if (input.researchCompleted) patch.researchCompleted = true;
+  if (input.customFields) patch.customFields = mode === "replace" ? { ...existing.customFields, ...input.customFields } : { ...input.customFields, ...existing.customFields };
   return updateLead(state, leadId, patch);
 }
 
 interface PlannedImport {
   state: CRMState;
   imported: number;
-  merged: number;
+  updated: number;
   skipped: number;
   batchId: string;
 }
@@ -114,8 +120,8 @@ function applyImportPlan(
   const effectiveDrafts = drafts.map((draft) => ({ ...draft }));
   const shouldImport = drafts.map(() => true);
   const destinations = new Map<number, { kind: "existing"; leadId: string } | { kind: "import"; index: number } | null>();
-  const existingMerges: Array<{ leadId: string; input: LeadImportInput }> = [];
-  let merged = 0;
+  const existingMerges: Array<{ leadId: string; input: LeadImportInput; mode: "merge" | "replace" }> = [];
+  let updated = 0;
   let skipped = 0;
 
   drafts.forEach((draft, index) => {
@@ -131,7 +137,7 @@ function applyImportPlan(
       skipped += 1;
       return;
     }
-    if (decision !== "merge") {
+    if (decision !== "merge" && decision !== "replace") {
       destinations.set(index, { kind: "import", index });
       return;
     }
@@ -140,8 +146,8 @@ function applyImportPlan(
     if (preferred?.lead.id) {
       shouldImport[index] = false;
       destinations.set(index, { kind: "existing", leadId: preferred.lead.id });
-      existingMerges.push({ leadId: preferred.lead.id, input: draft });
-      merged += 1;
+      existingMerges.push({ leadId: preferred.lead.id, input: draft, mode: decision });
+      updated += 1;
       return;
     }
 
@@ -150,13 +156,13 @@ function applyImportPlan(
     if (destination?.kind === "existing") {
       shouldImport[index] = false;
       destinations.set(index, destination);
-      existingMerges.push({ leadId: destination.leadId, input: draft });
-      merged += 1;
+      existingMerges.push({ leadId: destination.leadId, input: draft, mode: decision });
+      updated += 1;
     } else if (destination?.kind === "import") {
       shouldImport[index] = false;
       destinations.set(index, destination);
-      effectiveDrafts[destination.index] = mergeLeadInputs(effectiveDrafts[destination.index], draft);
-      merged += 1;
+      effectiveDrafts[destination.index] = mergeLeadInputs(effectiveDrafts[destination.index], draft, decision);
+      updated += 1;
     } else {
       // The earlier row was skipped; preserve this row instead of dropping data.
       destinations.set(index, { kind: "import", index });
@@ -164,8 +170,8 @@ function applyImportPlan(
   });
 
   let next = state;
-  existingMerges.forEach(({ leadId, input }) => {
-    next = mergeImportIntoLead(next, leadId, input);
+  existingMerges.forEach(({ leadId, input, mode }) => {
+    next = mergeImportIntoLead(next, leadId, input, mode);
   });
   const inputs = effectiveDrafts.filter((_, index) => shouldImport[index]);
   next = importLeads(next, inputs, {
@@ -192,7 +198,7 @@ function applyImportPlan(
   return {
     state: next,
     imported: inputs.length,
-    merged,
+    updated,
     skipped,
     batchId: createdBatch?.id ?? "",
   };
@@ -206,6 +212,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
   const [fileSize, setFileSize] = useState(0);
   const [table, setTable] = useState<string[][]>([]);
   const [mapping, setMapping] = useState<HeaderMapping>({});
+  const [customColumns, setCustomColumns] = useState<Record<number, string>>({});
   const [batchName, setBatchName] = useState("");
   const [source, setSource] = useState("Lead list import");
   const [decisions, setDecisions] = useState<Record<number, DuplicateDecision>>({});
@@ -215,8 +222,8 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
   const [result, setResult] = useState<ImportResult | null>(null);
 
   const parsed = useMemo(
-    () => tableToLeadDrafts(table, { mapping }),
-    [mapping, table],
+    () => tableToLeadDrafts(table, { mapping, customColumns }),
+    [customColumns, mapping, table],
   );
   const duplicates = useMemo(
     () => findPossibleDuplicates(parsed.drafts, state.leads),
@@ -235,6 +242,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
     setFileSize(0);
     setTable([]);
     setMapping({});
+    setCustomColumns({});
     setBatchName("");
     setSource("Lead list import");
     setDecisions({});
@@ -253,6 +261,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
       setFileSize(file.size);
       setTable([imported.headers, ...imported.rows]);
       setMapping(imported.mapping);
+      setCustomColumns({});
       setBatchName(file.name.replace(/\.(csv|xlsx)$/i, ""));
       setDecisions({});
       setResult(null);
@@ -282,7 +291,13 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
       for (const [key, mappedColumn] of Object.entries(next)) {
         if (mappedColumn === column || key === field) delete next[key as keyof HeaderMapping];
       }
-      if (field) next[field as keyof HeaderMapping] = column;
+      if (field && field !== "__custom__") next[field as keyof HeaderMapping] = column;
+      return next;
+    });
+    setCustomColumns((current) => {
+      const next = { ...current };
+      delete next[column];
+      if (field === "__custom__") next[column] = table[0]?.[column]?.trim() || `Custom field ${column + 1}`;
       return next;
     });
   };
@@ -291,7 +306,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
     const initial: Record<number, DuplicateDecision> = {};
     duplicates.forEach((duplicate) => { initial[duplicate.index] = "unresolved"; });
     setDecisions(initial);
-    setStep(2);
+    setStep(3);
   };
 
   const runImport = () => {
@@ -320,7 +335,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
     );
     const fallback = summary ?? {
       imported: parsed.drafts.length - decisionsToSkipped(decisions),
-      merged: decisionsToCount(decisions, "merge"),
+      updated: decisionsToCount(decisions, "merge") + decisionsToCount(decisions, "replace"),
       skipped: decisionsToSkipped(decisions),
       batchId: "",
     };
@@ -329,12 +344,12 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
       batchName,
       source,
       imported: fallback.imported,
-      merged: fallback.merged,
+      updated: fallback.updated,
       skipped: fallback.skipped,
       duplicates: duplicates.length,
       rejected: rejectedRows,
     });
-    setStep(4);
+    setStep(5);
   };
 
   return (
@@ -343,7 +358,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
         eyebrow="Data intake"
         title="Import Leads"
         description="Bring in 500+ leads at once. Columns are mapped safely, duplicates stay under your control, and every batch remains traceable."
-        actions={step > 0 && step < 4 ? <Button variant="ghost" onClick={reset} startIcon={<Icon name="close" size={15} />}>Cancel import</Button> : undefined}
+        actions={step > 0 && step < 5 ? <Button variant="ghost" onClick={reset} startIcon={<Icon name="close" size={15} />}>Cancel import</Button> : undefined}
       />
 
       <div className="import-layout">
@@ -385,10 +400,18 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
 
           {step === 1 ? (
             <section className="panel">
+              <div className="panel__header"><div><h2 className="panel__title">Preview spreadsheet</h2><p className="panel__subtitle">{fileName} · {formatFileSize(fileSize)} · {parsed.rows.length.toLocaleString()} data rows · {parsed.headers.length} columns</p></div><Badge tone="info">Nothing imported yet</Badge></div>
+              <div className="panel__body"><p className="field__hint import-preview-hint">Check the headers and first rows exactly as Relay detected them. Every column will be available on the next screen.</p><div className="table-wrap import-preview-table"><table className="data-table"><thead><tr>{parsed.headers.map((header, index) => <th key={`${header}-${index}`}>{header || `Column ${index + 1}`}</th>)}</tr></thead><tbody>{parsed.rows.slice(0, 8).map((row, rowIndex) => <tr key={rowIndex}>{parsed.headers.map((_, column) => <td key={column}>{row[column] || "—"}</td>)}</tr>)}</tbody></table></div>{parsed.rows.length > 8 ? <p className="field__hint">Showing 8 of {parsed.rows.length.toLocaleString()} rows.</p> : null}</div>
+              <div className="panel__footer" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><Button variant="ghost" onClick={() => setStep(0)} startIcon={<Icon name="arrowLeft" size={15} />}>Choose another file</Button><Button variant="primary" onClick={() => setStep(2)} endIcon={<Icon name="arrowRight" size={15} />}>Map all columns</Button></div>
+            </section>
+          ) : null}
+
+          {step === 2 ? (
+            <section className="panel">
               <div className="panel__header"><div><h2 className="panel__title">Map spreadsheet columns</h2><p className="panel__subtitle">{fileName} · {formatFileSize(fileSize)} · {parsed.rows.length.toLocaleString()} data rows</p></div><Badge tone={mapping.clinicName === undefined ? "danger" : "success"}>{mapping.clinicName === undefined ? "Clinic Name required" : "Required field mapped"}</Badge></div>
               <div className="panel__body" style={{ padding: 0 }}>
                 {parsed.headers.map((header, column) => {
-                  const mappedField = Object.entries(mapping).find(([, value]) => value === column)?.[0] ?? "";
+                  const mappedField = customColumns[column] ? "__custom__" : Object.entries(mapping).find(([, value]) => value === column)?.[0] ?? "";
                   const samples = parsed.rows.slice(0, 4).map((row) => row[column]).filter(Boolean).join(" · ");
                   return (
                     <div className="mapping-row" key={`${header}-${column}`}>
@@ -397,21 +420,22 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                       <select aria-label={`Map ${header || `column ${column + 1}`}`} value={mappedField} onChange={(event) => setColumnMapping(column, event.target.value)}>
                         <option value="">Do not import</option>
                         {LEAD_IMPORT_FIELDS.map((field) => <option key={field.key} value={field.key}>{field.label}{field.key === "clinicName" ? " *" : ""}</option>)}
+                        <option value="__custom__">Other / custom field</option>
                       </select>
-                      <span className="mapping-row__sample" title={samples}>{samples || "No sample value"}</span>
+                      {mappedField === "__custom__" ? <input className="mapping-row__custom" value={customColumns[column] ?? ""} onChange={(event) => setCustomColumns((current) => ({ ...current, [column]: event.target.value }))} aria-label={`Custom field name for ${header || `column ${column + 1}`}`} /> : <span className="mapping-row__sample" title={samples}>{samples || "No sample value"}</span>}
                     </div>
                   );
                 })}
               </div>
               <div className="panel__footer" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <Button variant="ghost" onClick={() => setStep(0)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(1)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
                 <Button variant="primary" disabled={mapping.clinicName === undefined || parsed.drafts.length === 0} onClick={goToDuplicates} endIcon={<Icon name="arrowRight" size={15} />}>Continue with {parsed.drafts.length.toLocaleString()} valid leads</Button>
               </div>
               {parsed.errors.length ? <div style={{ padding: "0 18px 14px" }}><p className="field__error"><Icon name="warning" size={14} />{parsed.errors.length} mapping or row issue{parsed.errors.length === 1 ? "" : "s"}. Invalid rows will not be imported.</p></div> : null}
             </section>
           ) : null}
 
-          {step === 2 ? (
+          {step === 3 ? (
             <section className="panel">
               <div className="panel__header"><div><h2 className="panel__title">Resolve possible duplicates</h2><p className="panel__subtitle">Matches use normalized website domain, phone, or clinic plus location. Nothing is silently deleted.</p></div><Badge tone={duplicates.length ? "warning" : "success"}>{duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}</Badge></div>
               <div className="panel__body">
@@ -427,7 +451,8 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                           <div className="duplicate-card__record"><span className="duplicate-card__label">Possible match · {match?.reasons.map(readableReason).join(", ")}</span><span className="duplicate-card__name">{match?.lead.clinicName ?? "Earlier import row"}</span><small>{match?.lead.directPhone || match?.lead.websiteUrl || `${match?.lead.city ?? ""}, ${match?.lead.state ?? ""}`}</small></div>
                           <div className="duplicate-card__actions" role="group" aria-label={`Resolve ${draft.clinicName}`}>
                             <Button size="sm" variant={decision === "merge" ? "primary" : "secondary"} aria-pressed={decision === "merge"} onClick={() => setDecisions((current) => ({ ...current, [duplicate.index]: "merge" }))}>Merge</Button>
-                            <Button size="sm" variant={decision === "keep" ? "primary" : "secondary"} aria-pressed={decision === "keep"} onClick={() => setDecisions((current) => ({ ...current, [duplicate.index]: "keep" }))}>Keep Both</Button>
+                            <Button size="sm" variant={decision === "replace" ? "primary" : "secondary"} aria-pressed={decision === "replace"} onClick={() => setDecisions((current) => ({ ...current, [duplicate.index]: "replace" }))}>Replace Existing</Button>
+                            <Button size="sm" variant={decision === "keep" ? "primary" : "secondary"} aria-pressed={decision === "keep"} onClick={() => setDecisions((current) => ({ ...current, [duplicate.index]: "keep" }))}>Import Anyway</Button>
                             <Button size="sm" variant={decision === "skip" ? "danger" : "secondary"} aria-pressed={decision === "skip"} onClick={() => setDecisions((current) => ({ ...current, [duplicate.index]: "skip" }))}>Skip</Button>
                           </div>
                         </article>
@@ -437,13 +462,13 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                 ) : <EmptyState compact icon={<Icon name="checkCircle" size={24} />} title="No duplicates found" description="Every valid row can continue to the review step." />}
               </div>
               <div className="panel__footer" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <Button variant="ghost" onClick={() => setStep(1)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
-                <Button variant="primary" disabled={unresolvedDuplicates > 0} onClick={() => setStep(3)} endIcon={<Icon name="arrowRight" size={15} />}>{unresolvedDuplicates ? `Resolve ${unresolvedDuplicates} remaining` : "Review import"}</Button>
+                <Button variant="ghost" onClick={() => setStep(2)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
+                <Button variant="primary" disabled={unresolvedDuplicates > 0} onClick={() => setStep(4)} endIcon={<Icon name="arrowRight" size={15} />}>{unresolvedDuplicates ? `Resolve ${unresolvedDuplicates} remaining` : "Review import"}</Button>
               </div>
             </section>
           ) : null}
 
-          {step === 3 ? (
+          {step === 4 ? (
             <section className="panel">
               <div className="panel__header"><div><h2 className="panel__title">Review and import</h2><p className="panel__subtitle">Confirm batch details and spot-check the first records.</p></div><Badge tone="accent">{parsed.drafts.length.toLocaleString()} valid rows</Badge></div>
               <div className="panel__body">
@@ -452,8 +477,8 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                   <label className="field"><span className="field__label">Source</span><input type="text" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Supplier or research source" /></label>
                 </div>
                 <div className="import-result-grid" style={{ marginBottom: 18 }}>
-                  <ImportStat value={parsed.drafts.length - decisionsToSkipped(decisions) - decisionsToCount(decisions, "merge")} label="New leads" />
-                  <ImportStat value={decisionsToCount(decisions, "merge")} label="Merged" />
+                  <ImportStat value={parsed.drafts.length - decisionsToSkipped(decisions) - decisionsToCount(decisions, "merge") - decisionsToCount(decisions, "replace")} label="New leads" />
+                  <ImportStat value={decisionsToCount(decisions, "merge") + decisionsToCount(decisions, "replace")} label="Updated" />
                   <ImportStat value={decisionsToSkipped(decisions) + rejectedRows} label="Skipped / invalid" />
                 </div>
                 <div className="table-wrap">
@@ -465,13 +490,13 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                 {error ? <p className="field__error" style={{ marginTop: 12 }}><Icon name="alert" size={14} />{error}</p> : null}
               </div>
               <div className="panel__footer" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <Button variant="ghost" onClick={() => setStep(2)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(3)} startIcon={<Icon name="arrowLeft" size={15} />}>Back</Button>
                 <Button variant="primary" disabled={!batchName.trim()} onClick={runImport} startIcon={<Icon name="import" size={16} />}>Import batch</Button>
               </div>
             </section>
           ) : null}
 
-          {step === 4 && result ? (
+          {step === 5 && result ? (
             <section className="panel">
               <div className="panel__body">
                 <EmptyState
@@ -481,7 +506,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                 />
                 <div className="import-result-grid">
                   <ImportStat value={result.imported} label="New leads" />
-                  <ImportStat value={result.merged} label="Merged" />
+                  <ImportStat value={result.updated} label="Updated" />
                   <ImportStat value={result.skipped + result.rejected} label="Skipped / invalid" />
                   <ImportStat value={result.duplicates} label="Duplicates reviewed" />
                 </div>
@@ -515,7 +540,8 @@ function readableReason(value: string): string {
 
 function readableDecision(value: DuplicateDecision | undefined): string {
   if (value === "merge") return "Merge";
-  if (value === "keep") return "Keep both";
+  if (value === "replace") return "Replace existing";
+  if (value === "keep") return "Import anyway";
   if (value === "skip") return "Skip";
   return "Review";
 }
