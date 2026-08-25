@@ -39,8 +39,11 @@ function lead(overrides: Partial<Lead> = {}): Lead {
     timeZone: "America/New_York",
     specialty: "Dermatology",
     practiceSize: "12",
+    decisionMakerFirstName: "Sarah",
+    decisionMakerLastName: "Cole",
     decisionMakerName: "Sarah Cole",
     decisionMakerRole: "Practice Manager",
+    personLinkedinUrl: "https://linkedin.com/in/sarah-cole",
     contactType: "practice_manager",
     directPhone: "+1 (305) 555-0100",
     mobilePhone: "",
@@ -48,6 +51,7 @@ function lead(overrides: Partial<Lead> = {}): Lead {
     email: "sarah@harborskin.example",
     alternatePhones: [],
     pixelPresent: "yes",
+    trackingTechnologyFound: "Meta Pixel | Google Analytics",
     trackingTechnologies: ["Meta Pixel", "Google Tag Manager"],
     primaryFinding: "Meta Pixel on appointment form",
     secondaryFinding: "",
@@ -205,6 +209,47 @@ describe("lead import mapping", () => {
     expect(new Set(Object.values(mapping)).size).toBe(Object.values(mapping).length);
   });
 
+  it("recognizes the source spreadsheet headers and preserves their exact values", () => {
+    const sourceHeaders = [
+      "Clinic Name", "Website URL", "Decision-Maker First Name", "Last Name", "Decision-Maker Role",
+      "Email", "Person Linkedin Url", "Direct Phone", "Personal Phone Number", "Extension", "City", "State",
+      "Tracking Technology Found",
+    ];
+    const mapping = autoMapHeaders(sourceHeaders);
+    expect(mapping).toMatchObject({
+      clinicName: 0,
+      websiteUrl: 1,
+      decisionMakerFirstName: 2,
+      decisionMakerLastName: 3,
+      decisionMakerRole: 4,
+      email: 5,
+      personLinkedinUrl: 6,
+      directPhone: 7,
+      mobilePhone: 8,
+      extension: 9,
+      city: 10,
+      state: 11,
+      trackingTechnologyFound: 12,
+    });
+
+    const tracking = "Meta Pixel | GTM | Google Analytics";
+    const result = tableToLeadDrafts([
+      sourceHeaders,
+      ["Harbor Skin", "https://harbor.example", "Sarah", "Cole", "Practice Manager", "sarah@example.com", "https://linkedin.com/in/sarah", "305-555-0100", "786-555-0101", "24", "Miami", "FL", tracking],
+    ]);
+    expect(result.errors).toEqual([]);
+    expect(result.drafts[0]).toMatchObject({
+      decisionMakerFirstName: "Sarah",
+      decisionMakerLastName: "Cole",
+      decisionMakerName: "Sarah Cole",
+      personLinkedinUrl: "https://linkedin.com/in/sarah",
+      directPhone: "305-555-0100",
+      mobilePhone: "786-555-0101",
+      extension: "24",
+      trackingTechnologyFound: tracking,
+    });
+  });
+
   it("converts a mapped row into a normalized LeadImportInput", () => {
     const mapping = autoMapHeaders(headers);
     const draft = rowToLeadDraft(
@@ -245,6 +290,14 @@ describe("lead import mapping", () => {
       "Sales Territory": "South East",
     });
   });
+
+  it("stores every unfamiliar column automatically as a custom field", () => {
+    const result = tableToLeadDrafts([
+      ["Clinic Name", "Unfamiliar Supplier Column"],
+      ["Harbor Skin", "Exact source value"],
+    ]);
+    expect(result.drafts[0].customFields).toEqual({ "Unfamiliar Supplier Column": "Exact source value" });
+  });
 });
 
 describe("duplicate detection", () => {
@@ -265,7 +318,7 @@ describe("duplicate detection", () => {
     };
     const matches = findDuplicateMatches(candidate, [existing]);
     expect(matches).toHaveLength(1);
-    expect(matches[0].reasons).toEqual(["domain", "phone", "clinic_location"]);
+    expect(matches[0].reasons).toEqual(["clinic_domain", "phone", "clinic_location"]);
     expect(duplicateIdentityKeys({ clinicName: "Only a Name" }).clinicLocation).toBe("");
   });
 
@@ -325,7 +378,7 @@ describe("versioned JSON backup", () => {
       format: CRM_BACKUP_FORMAT,
       version: CRM_BACKUP_VERSION,
       exportedAt: NOW,
-      appSchemaVersion: 2,
+      appSchemaVersion: 3,
     });
     expect(parseBackup(json)).toEqual(state);
   });

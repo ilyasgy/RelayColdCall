@@ -1,5 +1,5 @@
 import { createEmptyState, cloneDefaultSettings } from "./defaults";
-import { CRM_SCHEMA_VERSION, type CRMSettings, type CRMState, type PersistenceStatus } from "../types";
+import { CRM_SCHEMA_VERSION, type CRMSettings, type CRMState, type Lead, type PersistenceStatus } from "../types";
 
 const DATABASE_NAME = "relay-cold-call-crm";
 const DATABASE_VERSION = 1;
@@ -171,9 +171,36 @@ export function migrateState(raw: unknown): CRMState | null {
   const priorSchemaVersion = typeof source.schemaVersion === "number" ? source.schemaVersion : 1;
   const leads = Array.isArray(source.leads)
     ? source.leads.map((lead) => {
+        const sourceLead = lead as Partial<Lead>;
+        const customFields = sourceLead.customFields && typeof sourceLead.customFields === "object"
+          ? { ...sourceLead.customFields }
+          : {};
+        const takeCustomField = (...names: string[]) => {
+          const key = Object.keys(customFields).find((candidate) =>
+            names.some((name) => candidate.trim().toLowerCase() === name.toLowerCase()),
+          );
+          if (!key) return "";
+          const value = customFields[key] ?? "";
+          delete customFields[key];
+          return value;
+        };
+        const decisionMakerFirstName = sourceLead.decisionMakerFirstName
+          ?? takeCustomField("Decision-Maker First Name", "Decision Maker First Name", "First Name");
+        const decisionMakerLastName = sourceLead.decisionMakerLastName
+          ?? takeCustomField("Last Name", "Decision-Maker Last Name", "Decision Maker Last Name");
+        const personLinkedinUrl = sourceLead.personLinkedinUrl
+          ?? takeCustomField("Person Linkedin Url", "Person LinkedIn URL", "LinkedIn URL");
+        const trackingTechnologyFound = sourceLead.trackingTechnologyFound
+          ?? (takeCustomField("Tracking Technology Found") || (sourceLead.trackingTechnologies ?? []).join(" | "));
         const migrated = {
           ...lead,
-          customFields: lead.customFields && typeof lead.customFields === "object" ? lead.customFields : {},
+          decisionMakerFirstName,
+          decisionMakerLastName,
+          decisionMakerName: sourceLead.decisionMakerName
+            ?? [decisionMakerFirstName, decisionMakerLastName].filter(Boolean).join(" "),
+          personLinkedinUrl,
+          trackingTechnologyFound,
+          customFields,
         };
         if (
           priorSchemaVersion < 2

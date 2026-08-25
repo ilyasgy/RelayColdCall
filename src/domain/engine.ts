@@ -444,13 +444,14 @@ export function findDuplicateLeadIds(state: CRMState, input: LeadImportInput): s
   return state.leads
     .filter((lead) => {
       const sameDomain = Boolean(domain && lead.websiteDomain === domain);
+      const sameClinic = Boolean(name && lead.clinicName.trim().toLowerCase() === name);
       const leadPhones = [lead.directPhone, lead.mobilePhone, ...lead.alternatePhones].map(normalizePhone);
       const samePhone = Boolean(phone && leadPhones.includes(phone));
       const sameNameAndPlace =
         Boolean(name && city) &&
         lead.clinicName.trim().toLowerCase() === name &&
         lead.city.trim().toLowerCase() === city;
-      return sameDomain || samePhone || sameNameAndPlace;
+      return (sameDomain && sameClinic) || samePhone || sameNameAndPlace;
     })
     .map((lead) => lead.id);
 }
@@ -503,8 +504,12 @@ export function importLeads(
       timeZone: input.timeZone ?? state.settings.defaultLeadTimeZone,
       specialty: input.specialty ?? "",
       practiceSize: input.practiceSize ?? "",
-      decisionMakerName: input.decisionMakerName ?? "",
+      decisionMakerFirstName: input.decisionMakerFirstName ?? "",
+      decisionMakerLastName: input.decisionMakerLastName ?? "",
+      decisionMakerName: input.decisionMakerName
+        ?? [input.decisionMakerFirstName, input.decisionMakerLastName].filter(Boolean).join(" "),
       decisionMakerRole: input.decisionMakerRole ?? "",
+      personLinkedinUrl: input.personLinkedinUrl ?? "",
       contactType: input.contactType ?? "unknown",
       directPhone: input.directPhone ?? "",
       mobilePhone: input.mobilePhone ?? "",
@@ -512,6 +517,7 @@ export function importLeads(
       email: input.email ?? "",
       alternatePhones: [...(input.alternatePhones ?? [])],
       pixelPresent: input.pixelPresent ?? "unknown",
+      trackingTechnologyFound: input.trackingTechnologyFound ?? "",
       trackingTechnologies: [...(input.trackingTechnologies ?? [])],
       primaryFinding: input.primaryFinding ?? "",
       secondaryFinding: input.secondaryFinding ?? "",
@@ -661,6 +667,11 @@ export function updateLead(
     updatedAt: at,
     revision: lead.revision + 1,
   };
+  if (patch.decisionMakerFirstName !== undefined || patch.decisionMakerLastName !== undefined) {
+    updated.decisionMakerName = [updated.decisionMakerFirstName, updated.decisionMakerLastName]
+      .filter(Boolean)
+      .join(" ");
+  }
 
   if (patch.doNotCall) {
     updated = {

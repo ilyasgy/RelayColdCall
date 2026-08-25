@@ -1,7 +1,7 @@
 {
   "name": "relay-cold-call-crm",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A focused cold-call lead operations CRM.",
   "author": "Relay",
   "main": "electron/main.cjs",

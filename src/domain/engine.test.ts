@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyState } from "../data/defaults";
-import { clearState, loadState, requestPersistentStorage, saveState } from "../data/db";
+import { clearState, loadState, migrateState, requestPersistentStorage, saveState } from "../data/db";
 import type { CRMState, LeadImportInput } from "../types";
 import {
   addBusinessDays,
@@ -116,19 +116,47 @@ describe("imports and invariants", () => {
     expect(() => assertInvariants(result)).not.toThrow();
   });
 
-  it("detects website, phone, and clinic/location duplicate candidates", () => {
+  it("uses clinic plus website as the primary re-import match while retaining safe fallbacks", () => {
     const state = imported();
-    expect(findDuplicateLeadIds(state, leadInput("Different", { websiteUrl: "acmeclinic.com" }))).toEqual([
+    expect(findDuplicateLeadIds(state, leadInput("Different", { websiteUrl: "acmeclinic.com", directPhone: "646-555-0199" }))).toEqual([]);
+    expect(findDuplicateLeadIds(state, leadInput("Acme Clinic", { websiteUrl: "acmeclinic.com", directPhone: "646-555-0199" }))).toEqual([
       state.leads[0].id,
     ]);
     const skipped = importLeads(
       state,
-      [leadInput("Duplicate", { websiteUrl: "acmeclinic.com" })],
+      [leadInput("Duplicate", { websiteUrl: "different.example", directPhone: "212-555-0100" })],
       { duplicateStrategy: "skip" },
       shift(NOW, 1_000),
     );
     expect(skipped.leads).toHaveLength(1);
     expect(skipped.batches.at(-1)?.duplicateCount).toBe(1);
+  });
+
+  it("migrates recoverable source columns without disturbing workflow history", () => {
+    const state = imported();
+    const legacy = structuredClone(state) as CRMState & { schemaVersion: number };
+    legacy.schemaVersion = 2;
+    const legacyLead = legacy.leads[0] as Partial<(typeof legacy.leads)[number]>;
+    delete legacyLead.decisionMakerFirstName;
+    delete legacyLead.decisionMakerLastName;
+    delete legacyLead.personLinkedinUrl;
+    delete legacyLead.trackingTechnologyFound;
+    legacyLead.trackingTechnologies = ["Meta Pixel", "GTM", "Google Analytics"];
+    legacyLead.customFields = {
+      "Decision-Maker First Name": "Alex",
+      "Last Name": "Morgan",
+      "Person Linkedin Url": "https://linkedin.com/in/alex-morgan",
+    };
+
+    const migrated = migrateState(legacy);
+    expect(migrated?.leads[0]).toMatchObject({
+      decisionMakerFirstName: "Alex",
+      decisionMakerLastName: "Morgan",
+      personLinkedinUrl: "https://linkedin.com/in/alex-morgan",
+      trackingTechnologyFound: "Meta Pixel | GTM | Google Analytics",
+      coldAttemptCount: state.leads[0].coldAttemptCount,
+    });
+    expect(migrated?.activities).toEqual(state.activities);
   });
 });
 

@@ -2082,6 +2082,10 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
   background: var(--surface-inset);
 }
 .filter-row select { min-width: 118px; min-height: 34px; padding: 6px 28px 6px 9px; }
+.tracking-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.tracking-filter { min-height: 31px; padding: 5px 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--surface-inset); color: var(--text-secondary); font-size: 10px; font-weight: 680; }
+.tracking-filter:hover { border-color: var(--border-strong); color: var(--text); }
+.tracking-filter.is-active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
 .bulk-bar {
   position: sticky;
   top: var(--topbar-height);
@@ -2096,8 +2100,13 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
   box-shadow: var(--shadow-sm);
 }
 .bulk-bar > strong { margin-right: 6px; color: var(--accent); font-size: 11px; }
-.leads-table { min-width: 1160px; }
+.leads-table { min-width: 1540px; }
 .leads-table .select-column { width: 42px; text-align: center; }
+.lead-clinic-cell { min-width: 220px; }
+.lead-clinic-cell .table-primary-link { max-width: 280px; white-space: normal; }
+.lead-clinic-cell > a { display: block; width: max-content; max-width: 240px; margin-top: 3px; overflow: hidden; color: var(--accent); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tracking-value { min-width: 210px; max-width: 320px; white-space: normal; }
+.table-website-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); white-space: nowrap; }
 
 .filter-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .filter-chips > button {
@@ -2163,6 +2172,9 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .quick-outcome-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }
 .quick-outcome-grid .button { min-width: 0; padding-inline: 8px; }
 .detail-grid--main { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.source-data-group { margin-top: 14px; }
+.source-data-group h4 { margin: 0 0 7px; color: var(--text-secondary); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.source-data-group .detail-grid { padding: 0; }
 .custom-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle); }
 .custom-field-grid > div { display: grid; padding: 9px 10px; border-radius: 7px; background: var(--surface-inset); }
 .custom-field-grid small { color: var(--text-muted); font-size: 9px; text-transform: uppercase; }
@@ -2179,6 +2191,8 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .import-preview-table { max-height: 420px; border: 1px solid var(--border-subtle); border-radius: 8px; }
 .import-preview-table .data-table { min-width: max-content; }
 .mapping-row__custom { width: 100%; min-width: 120px; }
+.mapping-row--header { min-height: 38px; background: var(--surface-inset); color: var(--text-muted); font-size: 9px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.mapping-row__example { display: grid; min-width: 0; gap: 4px; }
 
 @media (max-width: 1180px) {
   .today-summary { grid-template-columns: 1fr; }
@@ -2198,6 +2212,8 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
   .today-meeting-list > button { grid-template-columns: 66px minmax(0, 1fr) 18px; }
   .today-meeting-list .badge { display: none; }
   .leads-toolbar { align-items: stretch; flex-direction: column; }
+  .tracking-filter-row { flex-wrap: nowrap; overflow-x: auto; }
+  .tracking-filter { flex: 0 0 auto; }
   .columns-control .button { width: 100%; }
   .columns-menu { right: auto; left: 0; width: min(310px, calc(100vw - 48px)); }
   .filter-row { flex-wrap: nowrap; overflow-x: auto; }
@@ -2216,5 +2232,6 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
   .quick-outcome-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detail-grid--main, .custom-field-grid { grid-template-columns: 1fr; }
   .drawer--simple { width: 100vw; }
+  .mapping-row--header { display: none; }
   .mapping-row__custom { width: 100%; }
 }

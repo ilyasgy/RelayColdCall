@@ -67,18 +67,21 @@ function mergeImportIntoLead(state: CRMState, leadId: string, input: LeadImportI
   const stringFields: Array<keyof Pick<
     Lead,
     | "clinicName" | "websiteUrl" | "city" | "state" | "timeZone" | "specialty" | "practiceSize"
-    | "decisionMakerName" | "decisionMakerRole" | "directPhone" | "mobilePhone" | "extension" | "email"
+    | "decisionMakerFirstName" | "decisionMakerLastName" | "decisionMakerName" | "decisionMakerRole"
+    | "personLinkedinUrl" | "directPhone" | "mobilePhone" | "extension" | "email" | "trackingTechnologyFound"
     | "primaryFinding" | "secondaryFinding" | "findingCategory" | "evidenceNotes" | "pitchNotes"
     | "securityGrade" | "lastConversationNotes" | "assignedCaller"
   >> = [
     "clinicName", "websiteUrl", "city", "state", "timeZone", "specialty", "practiceSize",
-    "decisionMakerName", "decisionMakerRole", "directPhone", "mobilePhone", "extension", "email",
+    "decisionMakerFirstName", "decisionMakerLastName", "decisionMakerName", "decisionMakerRole",
+    "personLinkedinUrl", "directPhone", "mobilePhone", "extension", "email", "trackingTechnologyFound",
     "primaryFinding", "secondaryFinding", "findingCategory", "evidenceNotes", "pitchNotes",
     "securityGrade", "lastConversationNotes", "assignedCaller",
   ];
   for (const field of stringFields) {
     const value = input[field];
-    if (typeof value === "string" && value.trim() && (mode === "replace" || !existing[field].trim())) {
+    if (!Object.prototype.hasOwnProperty.call(input, field) || typeof value !== "string") continue;
+    if (mode === "replace" || (value.trim() && !existing[field].trim())) {
       (patch as Record<string, unknown>)[field] = value.trim();
     }
   }
@@ -261,7 +264,11 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
       setFileSize(file.size);
       setTable([imported.headers, ...imported.rows]);
       setMapping(imported.mapping);
-      setCustomColumns({});
+      const mappedColumns = new Set(Object.values(imported.mapping));
+      setCustomColumns(imported.headers.reduce<Record<number, string>>((columns, header, index) => {
+        if (header && !mappedColumns.has(index)) columns[index] = header;
+        return columns;
+      }, {}));
       setBatchName(file.name.replace(/\.(csv|xlsx)$/i, ""));
       setDecisions({});
       setResult(null);
@@ -297,14 +304,18 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
     setCustomColumns((current) => {
       const next = { ...current };
       delete next[column];
-      if (field === "__custom__") next[column] = table[0]?.[column]?.trim() || `Custom field ${column + 1}`;
+      if (field === "__custom__" || !field) next[column] = table[0]?.[column]?.trim() || `Custom field ${column + 1}`;
       return next;
     });
   };
 
   const goToDuplicates = () => {
     const initial: Record<number, DuplicateDecision> = {};
-    duplicates.forEach((duplicate) => { initial[duplicate.index] = "unresolved"; });
+    duplicates.forEach((duplicate) => {
+      initial[duplicate.index] = duplicate.matches.some((match) =>
+        Boolean(match.lead.id) && match.reasons.includes("clinic_domain"),
+      ) ? "replace" : "unresolved";
+    });
     setDecisions(initial);
     setStep(3);
   };
@@ -410,6 +421,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
             <section className="panel">
               <div className="panel__header"><div><h2 className="panel__title">Map spreadsheet columns</h2><p className="panel__subtitle">{fileName} · {formatFileSize(fileSize)} · {parsed.rows.length.toLocaleString()} data rows</p></div><Badge tone={mapping.clinicName === undefined ? "danger" : "success"}>{mapping.clinicName === undefined ? "Clinic Name required" : "Required field mapped"}</Badge></div>
               <div className="panel__body" style={{ padding: 0 }}>
+                <div className="mapping-row mapping-row--header" aria-hidden="true"><span>Spreadsheet column</span><span /><span>App field</span><span>Example value</span></div>
                 {parsed.headers.map((header, column) => {
                   const mappedField = customColumns[column] ? "__custom__" : Object.entries(mapping).find(([, value]) => value === column)?.[0] ?? "";
                   const samples = parsed.rows.slice(0, 4).map((row) => row[column]).filter(Boolean).join(" · ");
@@ -418,11 +430,10 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                       <span className="mapping-row__source">{header || `Column ${column + 1}`}</span>
                       <Icon name="arrowRight" size={16} />
                       <select aria-label={`Map ${header || `column ${column + 1}`}`} value={mappedField} onChange={(event) => setColumnMapping(column, event.target.value)}>
-                        <option value="">Do not import</option>
                         {LEAD_IMPORT_FIELDS.map((field) => <option key={field.key} value={field.key}>{field.label}{field.key === "clinicName" ? " *" : ""}</option>)}
                         <option value="__custom__">Other / custom field</option>
                       </select>
-                      {mappedField === "__custom__" ? <input className="mapping-row__custom" value={customColumns[column] ?? ""} onChange={(event) => setCustomColumns((current) => ({ ...current, [column]: event.target.value }))} aria-label={`Custom field name for ${header || `column ${column + 1}`}`} /> : <span className="mapping-row__sample" title={samples}>{samples || "No sample value"}</span>}
+                      <div className="mapping-row__example">{mappedField === "__custom__" ? <input className="mapping-row__custom" value={customColumns[column] ?? ""} onChange={(event) => setCustomColumns((current) => ({ ...current, [column]: event.target.value }))} aria-label={`Custom field name for ${header || `column ${column + 1}`}`} /> : null}<span className="mapping-row__sample" title={samples}>{samples || "Blank in preview rows"}</span></div>
                     </div>
                   );
                 })}
@@ -437,7 +448,7 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
 
           {step === 3 ? (
             <section className="panel">
-              <div className="panel__header"><div><h2 className="panel__title">Resolve possible duplicates</h2><p className="panel__subtitle">Matches use normalized website domain, phone, or clinic plus location. Nothing is silently deleted.</p></div><Badge tone={duplicates.length ? "warning" : "success"}>{duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}</Badge></div>
+              <div className="panel__header"><div><h2 className="panel__title">Resolve possible duplicates</h2><p className="panel__subtitle">Clinic name plus website domain is the primary re-import match. Exact matches default to Replace Existing, but nothing changes until you confirm the import.</p></div><Badge tone={duplicates.length ? "warning" : "success"}>{duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}</Badge></div>
               <div className="panel__body">
                 {duplicates.length ? (
                   <div className="card-list">
@@ -482,8 +493,8 @@ export function ImportPage({ onViewLeads }: ImportPageProps) {
                   <ImportStat value={decisionsToSkipped(decisions) + rejectedRows} label="Skipped / invalid" />
                 </div>
                 <div className="table-wrap">
-                  <table className="data-table"><thead><tr><th>Clinic</th><th>Contact</th><th>Phone</th><th>Location</th><th>Pixel</th><th>Decision</th></tr></thead>
-                    <tbody>{parsed.drafts.slice(0, 8).map((draft, index) => <tr key={`${draft.clinicName}-${index}`}><td><strong>{draft.clinicName}</strong><small>{draft.websiteUrl}</small></td><td>{draft.decisionMakerName || "—"}<small>{draft.decisionMakerRole}</small></td><td>{draft.directPhone || draft.mobilePhone || "—"}</td><td>{[draft.city, draft.state].filter(Boolean).join(", ") || "—"}</td><td>{draft.pixelPresent ?? "unknown"}</td><td>{duplicateByIndex.has(index) ? readableDecision(decisions[index]) : "Import"}</td></tr>)}</tbody>
+                  <table className="data-table"><thead><tr><th>Clinic</th><th>First Name</th><th>Last Name</th><th>Direct Phone</th><th>Personal Phone</th><th>Tracking Technology Found</th><th>Decision</th></tr></thead>
+                    <tbody>{parsed.drafts.slice(0, 8).map((draft, index) => <tr key={`${draft.clinicName}-${index}`}><td><strong>{draft.clinicName}</strong><small>{draft.websiteUrl}</small></td><td>{draft.decisionMakerFirstName || "—"}</td><td>{draft.decisionMakerLastName || "—"}</td><td>{draft.directPhone || "—"}</td><td>{draft.mobilePhone || "—"}</td><td>{draft.trackingTechnologyFound || "Unknown"}</td><td>{duplicateByIndex.has(index) ? readableDecision(decisions[index]) : "Import"}</td></tr>)}</tbody>
                   </table>
                 </div>
                 {parsed.drafts.length > 8 ? <p className="field__hint" style={{ marginTop: 10 }}>Previewing 8 of {parsed.drafts.length.toLocaleString()} valid rows.</p> : null}
