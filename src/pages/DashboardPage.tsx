@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, EmptyState, PageHeader, Progress } from "../components/UI";
 import { Icon } from "../components/Icon";
 import { LeadDrawer } from "../components/LeadDrawer";
@@ -21,14 +21,14 @@ interface TodayItem {
   priority: 2 | 3 | 4 | 5;
 }
 
-function startOfToday() {
-  const value = new Date();
+function startOfToday(now: number) {
+  const value = new Date(now);
   value.setHours(0, 0, 0, 0);
   return value;
 }
 
-function endOfToday() {
-  const value = new Date();
+function endOfToday(now: number) {
+  const value = new Date(now);
   value.setHours(23, 59, 59, 999);
   return value;
 }
@@ -61,8 +61,13 @@ function priorityWeight(lead: Lead) {
 export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps) {
   const { state, commit, notify } = useCRM();
   const [drawerLeadId, setDrawerLeadId] = useState<string | null>(null);
-  const from = startOfToday().getTime();
-  const through = endOfToday().getTime();
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const from = startOfToday(clock).getTime();
+  const through = endOfToday(clock).getTime();
 
   const todayCalls = state.callAttempts.filter((attempt) => !attempt.voidedAt && new Date(attempt.occurredAt).getTime() >= from);
   const completed = todayCalls.length;
@@ -102,7 +107,7 @@ export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps
   };
   const activeSession = [...state.sessions].reverse().find((session) => !session.endedAt);
   const firstWorkableLeadId = plan.find(({ lead, category }) =>
-    category === "new" || new Date(lead.nextAction?.dueAt ?? 0).getTime() <= Date.now(),
+    category === "new" || new Date(lead.nextAction?.dueAt ?? 0).getTime() <= clock,
   )?.lead.id;
 
   const start = () => {

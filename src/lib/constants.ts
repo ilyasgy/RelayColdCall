@@ -28,7 +28,7 @@ export const STATUS_LABELS: Record<WorkflowStatus, string> = {
   won: "Won / Client",
   lost: "Lost / Closed",
   do_not_call: "Do not call",
-  dormant_unreachable: "Dormant — Unreachable",
+  dormant_unreachable: "Unreachable",
   dormant_post_meeting_no_response: "Dormant — Post-meeting no response",
 };
 
