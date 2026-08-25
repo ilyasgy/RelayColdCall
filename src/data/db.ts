@@ -1,4 +1,4 @@
-import { createEmptyState, cloneDefaultSettings } from "./defaults";
+import { createEmptyState, cloneDefaultSettings, TERMINAL_STATUSES } from "./defaults";
 import { CRM_SCHEMA_VERSION, type CRMSettings, type CRMState, type Lead, type PersistenceStatus } from "../types";
 
 const DATABASE_NAME = "relay-cold-call-crm";
@@ -20,6 +20,24 @@ function canUseLocalStorage(): boolean {
   } catch {
     return false;
   }
+}
+
+function repairedColdRetryDueAt(
+  lead: Partial<Lead>,
+  now: string,
+  settings: CRMSettings,
+): string {
+  const basis = new Date(lead.lastCalledAt ?? lead.updatedAt ?? now);
+  const candidate = Number.isNaN(basis.getTime()) ? new Date(now) : basis;
+  const weekdays = settings.calling.callingWeekdays;
+  const holidays = new Set(settings.calling.holidayDates);
+  for (let offset = 0; offset < 14; offset += 1) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+    const dateKey = candidate.toISOString().slice(0, 10);
+    if (weekdays.includes(candidate.getUTCDay()) && !holidays.has(dateKey)) return candidate.toISOString();
+  }
+  candidate.setUTCDate(candidate.getUTCDate() + 1);
+  return candidate.toISOString();
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -153,6 +171,7 @@ export function migrateState(raw: unknown): CRMState | null {
     ...mergedSettings,
     calling: {
       ...mergedSettings.calling,
+      retryDelaysBusinessDays: [1, 1],
       maximumInitialAttempts: 3,
       maximumLifetimeAttempts: 3,
     },
@@ -192,7 +211,7 @@ export function migrateState(raw: unknown): CRMState | null {
           ?? takeCustomField("Person Linkedin Url", "Person LinkedIn URL", "LinkedIn URL");
         const trackingTechnologyFound = sourceLead.trackingTechnologyFound
           ?? (takeCustomField("Tracking Technology Found") || (sourceLead.trackingTechnologies ?? []).join(" | "));
-        const migrated = {
+        let migrated = {
           ...lead,
           decisionMakerFirstName,
           decisionMakerLastName,
@@ -201,17 +220,60 @@ export function migrateState(raw: unknown): CRMState | null {
           personLinkedinUrl,
           trackingTechnologyFound,
           customFields,
-        };
+        } as Lead;
         if (
           priorSchemaVersion < 2
           && (migrated.status === "recycle_later" || migrated.status === "extended_retry")
           && migrated.coldNoAnswerCount >= 3
         ) {
-          return {
+          migrated = {
             ...migrated,
             status: "dormant_unreachable" as const,
             pipelineStage: "dormant" as const,
             nextAction: null,
+            updatedAt: now,
+          };
+        }
+        if (
+          migrated.lastOutcome === "no_answer"
+          && migrated.pipelineStage === "cold"
+          && migrated.coldNoAnswerCount >= 3
+          && !TERMINAL_STATUSES.has(migrated.status)
+        ) {
+          migrated = {
+            ...migrated,
+            status: "dormant_unreachable",
+            pipelineStage: "dormant",
+            nextAction: null,
+            updatedAt: now,
+          };
+        } else if (
+          migrated.lastOutcome === "no_answer"
+          && migrated.pipelineStage === "cold"
+          && migrated.coldNoAnswerCount > 0
+          && migrated.coldNoAnswerCount < 3
+          && (
+            migrated.nextAction?.type !== "cold_retry"
+            || !migrated.nextAction.dueAt
+            || Number.isNaN(new Date(migrated.nextAction.dueAt).getTime())
+          )
+        ) {
+          const dueAt = repairedColdRetryDueAt(migrated, now, settings);
+          migrated = {
+            ...migrated,
+            status: "retry_scheduled",
+            nextAction: {
+              id: `action_repaired_${migrated.id}`,
+              leadId: migrated.id,
+              type: "cold_retry",
+              dueAt,
+              exact: false,
+              queueClass: "cold_retry",
+              queueEligible: true,
+              reason: `Retry — no answer attempt ${migrated.coldNoAnswerCount}`,
+              createdAt: migrated.lastCalledAt ?? now,
+              scheduleTimeZone: migrated.timeZone,
+            },
             updatedAt: now,
           };
         }

@@ -28,6 +28,8 @@ import type {
 
 const DAY_MS = 86_400_000;
 const MAX_UNDO_ENTRIES = 25;
+const COLD_NO_ANSWER_LIMIT = 3;
+const COLD_RETRY_DELAY_BUSINESS_DAYS = 1;
 
 export class DomainError extends Error {
   constructor(message: string) {
@@ -1083,13 +1085,14 @@ export function applyColdOutcome(
         break;
       }
 
-      const initialMaximum = 3;
-      if (coldNoAnswerCount < initialMaximum) {
-        const delays = draft.settings.calling.retryDelaysBusinessDays;
-        const delay =
-          delays[Math.max(0, coldNoAnswerCount - 1)] ??
-          draft.settings.calling.defaultRetryDelayBusinessDays;
-        const dueAt = automaticDueAt(draft, updated, at, delay, `retry:${coldNoAnswerCount}`);
+      if (coldNoAnswerCount < COLD_NO_ANSWER_LIMIT) {
+        const dueAt = automaticDueAt(
+          draft,
+          updated,
+          at,
+          COLD_RETRY_DELAY_BUSINESS_DAYS,
+          `retry:${coldNoAnswerCount}`,
+        );
         updated = {
           ...updated,
           status: "retry_scheduled",
@@ -1099,7 +1102,7 @@ export function applyColdOutcome(
             exact: false,
             queueClass: "cold_retry",
             queueEligible: true,
-            reason: `No answer attempt ${coldNoAnswerCount}; automatic retry`,
+            reason: `Retry — no answer attempt ${coldNoAnswerCount}`,
           }),
         };
       } else {
@@ -2303,6 +2306,23 @@ export function checkInvariants(state: CRMState): DomainInvariantViolation[] {
       issues.push({
         code: "INVALID_ACTION_DATE",
         message: `Lead ${lead.id} has an invalid next-action date`,
+        leadId: lead.id,
+      });
+    }
+    if (
+      lead.lastOutcome === "no_answer"
+      && lead.pipelineStage === "cold"
+      && lead.coldNoAnswerCount > 0
+      && lead.coldNoAnswerCount < COLD_NO_ANSWER_LIMIT
+      && (
+        lead.status !== "retry_scheduled"
+        || lead.nextAction?.type !== "cold_retry"
+        || !lead.nextAction.dueAt
+      )
+    ) {
+      issues.push({
+        code: "NO_ANSWER_MISSING_RETRY",
+        message: `No-answer lead ${lead.id} does not have a dated retry action`,
         leadId: lead.id,
       });
     }

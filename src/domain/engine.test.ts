@@ -161,7 +161,7 @@ describe("imports and invariants", () => {
 });
 
 describe("cold-call transitions", () => {
-  it("retries twice and finishes an unreachable lead after the third unanswered attempt", () => {
+  it("creates next-calling-day retries and finishes an unreachable lead after the third unanswered attempt", () => {
     const initial = imported();
     const leadId = initial.leads[0].id;
     let state = initial;
@@ -172,11 +172,29 @@ describe("cold-call transitions", () => {
       coldAttemptCount: 1,
       coldNoAnswerCount: 1,
     });
-    expect(state.leads[0].nextAction?.type).toBe("cold_retry");
+    const firstRetry = state.leads[0].nextAction!;
+    expect(firstRetry).toMatchObject({
+      type: "cold_retry",
+      queueClass: "cold_retry",
+      queueEligible: true,
+      reason: "Retry — no answer attempt 1",
+    });
+    expect(firstRetry.dueAt.slice(0, 10)).toBe("2026-08-25");
+    expect(getQueue(state, firstRetry.dueAt).map((candidate) => candidate.lead.id)).toContain(leadId);
 
-    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, DAY));
+    const missingRetry = {
+      ...state,
+      leads: [{ ...state.leads[0], nextAction: null }],
+    };
+    expect(() => assertInvariants(missingRetry)).toThrow("NO_ANSWER_MISSING_RETRY");
+
+    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, firstRetry.dueAt);
     expect(state.leads[0].status).toBe("retry_scheduled");
-    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, shift(NOW, 2 * DAY));
+    const secondRetry = state.leads[0].nextAction!;
+    expect(secondRetry.reason).toBe("Retry — no answer attempt 2");
+    expect(secondRetry.dueAt.slice(0, 10)).toBe("2026-08-26");
+
+    state = applyColdOutcome(state, leadId, { outcome: "no_answer" }, secondRetry.dueAt);
     expect(state.leads[0]).toMatchObject({
       status: "dormant_unreachable",
       pipelineStage: "dormant",
@@ -185,6 +203,27 @@ describe("cold-call transitions", () => {
       nextAction: null,
     });
     expect(() => assertInvariants(state)).not.toThrow();
+  });
+
+  it("repairs a saved cold No Answer lead that is missing its retry action", () => {
+    let state = imported();
+    state = applyColdOutcome(state, state.leads[0].id, { outcome: "no_answer" }, NOW);
+    const broken = structuredClone(state);
+    broken.leads[0].status = "new";
+    broken.leads[0].nextAction = null;
+
+    const repaired = migrateState(broken);
+    expect(repaired?.leads[0]).toMatchObject({
+      status: "retry_scheduled",
+      nextAction: {
+        type: "cold_retry",
+        queueClass: "cold_retry",
+        queueEligible: true,
+        reason: "Retry — no answer attempt 1",
+      },
+    });
+    expect(repaired?.leads[0].nextAction?.dueAt).toBeTruthy();
+    expect(() => assertInvariants(repaired!)).not.toThrow();
   });
 
   it("records an exact callback and permanently excludes do-not-call leads", () => {

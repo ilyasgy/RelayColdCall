@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS: CRMSettings = {
     callingHoursEnd: "17:30",
     callingWeekdays: [1, 2, 3, 4, 5],
     defaultRetryDelayBusinessDays: 1,
-    retryDelaysBusinessDays: [1, 2],
+    retryDelaysBusinessDays: [1, 1],
     maximumInitialAttempts: 3,
     recycleDelayBusinessDays: 14,
     maximumLifetimeAttempts: 3,

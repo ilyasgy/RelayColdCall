@@ -25,7 +25,7 @@ const columnLabels: Record<LeadColumn, string> = {
   stage: "Call Status", attempt: "Attempts", next: "Next Action",
 };
 
-const defaultColumns: LeadColumn[] = ["clinic", "firstName", "lastName", "role", "directPhone", "personalPhone", "extension", "city", "state", "tracking", "website"];
+const defaultColumns: LeadColumn[] = ["clinic", "firstName", "lastName", "role", "directPhone", "personalPhone", "extension", "city", "state", "tracking", "website", "stage", "attempt", "next"];
 
 const trackingFilters: Array<{ value: TrackingFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -174,7 +174,7 @@ export function LeadTable({ leads, onOpen, selectable = false, selected = new Se
     {visibleColumns.has("website") ? <td>{lead.websiteUrl ? <a className="table-website-link" href={websiteHref(lead.websiteUrl)} target="_blank" rel="noreferrer" title={lead.websiteUrl}>Open website <Icon name="externalLink" size={13} /></a> : "—"}</td> : null}
     {visibleColumns.has("stage") ? <td><Badge tone={STATUS_TONES[lead.status] as "info"} size="sm">{lifecycleLabel(lead)}</Badge><small>{STATUS_LABELS[lead.status]}</small></td> : null}
     {visibleColumns.has("attempt") ? <td>{lead.pipelineStage === "post_meeting" ? <strong>{lead.postMeetingTouchCount} / 5 touches</strong> : <strong>{lead.coldNoAnswerCount} / 3</strong>}</td> : null}
-    {visibleColumns.has("next") ? <td><strong>{lead.nextAction?.reason ?? "No future action"}</strong><small className={cn(lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < Date.now() && "text-danger")}>{lead.nextAction ? formatDateTime(lead.nextAction.dueAt) : "History retained"}</small></td> : null}
+    {visibleColumns.has("next") ? <td className={cn(lead.nextAction?.type === "cold_retry" && "retry-action-cell")}>{lead.nextAction?.type === "cold_retry" ? <Badge tone="info" size="sm">Retry</Badge> : null}<strong>{lead.nextAction?.reason ?? "No future action"}</strong><small className={cn(lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < Date.now() && "text-danger")}>{lead.nextAction ? formatDateTime(lead.nextAction.dueAt) : "History retained"}</small></td> : null}
     <td><Button variant="ghost" size="icon" onClick={() => onOpen(lead.id)} aria-label={`Open ${lead.clinicName}`}><Icon name="chevronRight" size={16} /></Button></td>
   </tr>)}</tbody></table></div>;
 }

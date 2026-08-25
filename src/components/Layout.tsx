@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useCRM } from "../data/store";
 import { useAppUpdates } from "../desktop/updates";
 import { NAV_ITEMS, type Route } from "../lib/constants";
@@ -14,9 +14,9 @@ interface LayoutProps {
   children: ReactNode;
 }
 
-function isDueByEndOfToday(value?: string | null) {
+function isDueByEndOfToday(value: string | null | undefined, now: number) {
   if (!value) return false;
-  const end = new Date();
+  const end = new Date(now);
   end.setHours(23, 59, 59, 999);
   return new Date(value).getTime() <= end.getTime();
 }
@@ -26,13 +26,18 @@ export function Layout({ route, onNavigate, onStartCalling, onSearch, children }
   const updates = useAppUpdates();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const today = new Date().toDateString();
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const today = new Date(clock).toDateString();
 
   const badges = useMemo<Record<string, number>>(() => ({
-    dashboard: state.leads.filter((lead) => lead.nextAction?.queueEligible && isDueByEndOfToday(lead.nextAction.dueAt)).length,
+    dashboard: state.leads.filter((lead) => lead.nextAction?.queueEligible && isDueByEndOfToday(lead.nextAction.dueAt, clock)).length,
     meetings: state.meetings.filter((meeting) => meeting.status === "booked" && new Date(meeting.scheduledAt).toDateString() === today).length,
-    "follow-ups": state.leads.filter((lead) => lead.pipelineStage === "post_meeting" && isDueByEndOfToday(lead.nextAction?.dueAt)).length,
-  }), [state.leads, state.meetings, today]);
+    "follow-ups": state.leads.filter((lead) => lead.pipelineStage === "post_meeting" && isDueByEndOfToday(lead.nextAction?.dueAt, clock)).length,
+  }), [clock, state.leads, state.meetings, today]);
 
   const navigate = (next: Route) => {
     onNavigate(next);
