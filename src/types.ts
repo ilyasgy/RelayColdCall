@@ -1,4 +1,4 @@
-export const CRM_SCHEMA_VERSION = 2 as const;
+export const CRM_SCHEMA_VERSION = 3 as const;
 
 export type ISODateTime = string;
 export type LeadPriority = "critical" | "high" | "normal" | "low";
@@ -91,8 +91,11 @@ export interface Lead {
   specialty: string;
   practiceSize: string;
 
+  decisionMakerFirstName: string;
+  decisionMakerLastName: string;
   decisionMakerName: string;
   decisionMakerRole: string;
+  personLinkedinUrl: string;
   contactType: ContactType;
   directPhone: string;
   mobilePhone: string;
@@ -101,6 +104,7 @@ export interface Lead {
   alternatePhones: string[];
 
   pixelPresent: PixelPresence;
+  trackingTechnologyFound: string;
   trackingTechnologies: string[];
   primaryFinding: string;
   secondaryFinding: string;

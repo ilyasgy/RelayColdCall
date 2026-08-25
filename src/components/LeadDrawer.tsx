@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useCRM } from "../data/store";
 import { addNote, applyColdOutcome, applyPostMeetingOutcome, reopenLead, updateLead } from "../domain/engine";
-import type { ContactType, FindingStrength, LeadPriority, PixelPresence, PostMeetingTouchType } from "../types";
-import { CONTACT_TYPE_LABELS, LOST_REASONS, PRIORITY_LABELS, STATUS_LABELS, STATUS_TONES } from "../lib/constants";
+import type { LeadPriority, PostMeetingTouchType } from "../types";
+import { LOST_REASONS, PRIORITY_LABELS, STATUS_LABELS, STATUS_TONES } from "../lib/constants";
 import { cn, formatDateTime, phoneHref, relativeTime, toLocalInputValue } from "../lib/format";
 import { Icon } from "./Icon";
 import { Badge, Button, Modal } from "./UI";
@@ -23,6 +23,11 @@ function nextBusinessMorning() {
   while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + 1);
   date.setHours(10, 0, 0, 0);
   return toLocalInputValue(date);
+}
+
+function externalHref(value: string) {
+  if (!value.trim()) return "";
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
 
 export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
@@ -104,7 +109,7 @@ export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
     <div className="drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <aside className="drawer drawer--simple" aria-label={`${lead.clinicName} details`}>
         <header className="drawer__header">
-          <div className="drawer__identity"><span className="lead-avatar lead-avatar--lg">{lead.clinicName.slice(0, 2).toUpperCase()}</span><div><div><Badge tone={STATUS_TONES[lead.status] as "info"}>{STATUS_LABELS[lead.status]}</Badge><Badge tone={lead.priority === "critical" ? "danger" : lead.priority === "high" ? "warning" : "neutral"}>{PRIORITY_LABELS[lead.priority]}</Badge></div><h2>{lead.clinicName}</h2><p>{lead.decisionMakerName || "Decision maker unknown"} · {lead.decisionMakerRole || CONTACT_TYPE_LABELS[lead.contactType]}</p></div></div>
+          <div className="drawer__identity"><span className="lead-avatar lead-avatar--lg">{lead.clinicName.slice(0, 2).toUpperCase()}</span><div><div><Badge tone={STATUS_TONES[lead.status] as "info"}>{STATUS_LABELS[lead.status]}</Badge><Badge tone={lead.priority === "critical" ? "danger" : lead.priority === "high" ? "warning" : "neutral"}>{PRIORITY_LABELS[lead.priority]}</Badge></div><h2>{lead.clinicName}</h2><p>{[lead.decisionMakerFirstName, lead.decisionMakerLastName].filter(Boolean).join(" ") || lead.decisionMakerName || "Decision maker not recorded"}{lead.decisionMakerRole ? ` · ${lead.decisionMakerRole}` : ""}</p></div></div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close lead details"><Icon name="close" size={19} /></Button>
         </header>
 
@@ -118,7 +123,7 @@ export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
           <div className="lead-primary-actions">
             <Button variant="secondary" size="sm" onClick={() => setEditing(true)} startIcon={<Icon name="edit" size={14} />}>Edit</Button>
             {lead.directPhone || lead.mobilePhone ? <Button variant="secondary" size="sm" onClick={() => void copy(lead.directPhone || lead.mobilePhone, "Phone number")} startIcon={<Icon name="copy" size={14} />}>Copy phone</Button> : null}
-            {lead.websiteUrl ? <><Button variant="secondary" size="sm" onClick={() => void copy(lead.websiteUrl, "Website")} startIcon={<Icon name="copy" size={14} />}>Copy website</Button><a className="button button--ghost button--sm" href={lead.websiteUrl} target="_blank" rel="noreferrer"><Icon name="externalLink" size={14} /> Open site</a></> : null}
+            {lead.websiteUrl ? <><Button variant="secondary" size="sm" onClick={() => void copy(lead.websiteUrl, "Website")} startIcon={<Icon name="copy" size={14} />}>Copy website</Button><a className="button button--ghost button--sm" href={externalHref(lead.websiteUrl)} target="_blank" rel="noreferrer"><Icon name="externalLink" size={14} /> Open site</a></> : null}
             {canReopen ? <Button variant="primary" size="sm" onClick={() => commit("Lead reopened", (current) => reopenLead(current, lead.id), "Lead reopened and added to Today")}>Reopen</Button> : null}
           </div>
 
@@ -146,26 +151,25 @@ export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
             </div>}
           </section> : null}
 
+          <section className="detail-section imported-source-section">
+            <div className="section-heading"><div><h3>Imported source data</h3><p>Values below mirror the spreadsheet. Call-management data is kept separately.</p></div><Badge tone="info">{batch?.name || "Direct entry"}</Badge></div>
+            <div className="source-data-group"><h4>Clinic</h4><div className="detail-grid detail-grid--main"><Detail label="Clinic Name" value={lead.clinicName} /><Detail label="Website" value={lead.websiteUrl} href={externalHref(lead.websiteUrl)} external /></div></div>
+            <div className="source-data-group"><h4>Contact</h4><div className="detail-grid detail-grid--main"><Detail label="First Name" value={lead.decisionMakerFirstName} /><Detail label="Last Name" value={lead.decisionMakerLastName} /><Detail label="Role" value={lead.decisionMakerRole} /><Detail label="Email" value={lead.email} href={lead.email ? `mailto:${lead.email}` : ""} /><Detail label="LinkedIn" value={lead.personLinkedinUrl} href={externalHref(lead.personLinkedinUrl)} external /></div></div>
+            <div className="source-data-group"><h4>Phones</h4><div className="detail-grid detail-grid--main"><Detail label="Direct Phone" value={lead.directPhone} href={phoneHref(lead.directPhone)} /><Detail label="Personal Phone" value={lead.mobilePhone} href={phoneHref(lead.mobilePhone)} /><Detail label="Extension" value={lead.extension} /></div></div>
+            <div className="source-data-group"><h4>Location</h4><div className="detail-grid detail-grid--main"><Detail label="City" value={lead.city} /><Detail label="State" value={lead.state} /></div></div>
+            <div className="source-data-group"><h4>Technical</h4><div className="detail-grid detail-grid--main"><Detail label="Tracking Technology Found" value={lead.trackingTechnologyFound || "Unknown"} />{lead.primaryFinding ? <Detail label="Finding" value={lead.primaryFinding} /> : null}</div></div>
+            {Object.keys(lead.customFields).length ? <div className="source-data-group"><h4>Other imported columns</h4><div className="custom-field-grid">{Object.entries(lead.customFields).map(([key, value]) => <Detail key={key} label={key} value={value} />)}</div></div> : null}
+          </section>
+
           <section className="detail-section">
-            <h3>Main information</h3>
+            <h3>Call management</h3>
             <div className="detail-grid detail-grid--main">
-              <Detail label="Clinic" value={lead.clinicName} />
-              <Detail label="Website" value={lead.websiteDomain || lead.websiteUrl} />
-              <Detail label="Decision-maker" value={lead.decisionMakerName} />
-              <Detail label="Role" value={lead.decisionMakerRole || CONTACT_TYPE_LABELS[lead.contactType]} />
-              <Detail label="Direct phone" value={lead.directPhone} href={phoneHref(lead.directPhone)} />
-              <Detail label="Mobile phone" value={lead.mobilePhone} href={phoneHref(lead.mobilePhone)} />
-              <Detail label="Location" value={[lead.city, lead.state].filter(Boolean).join(", ")} />
-              <Detail label="Tracking pixel" value={lead.pixelPresent} />
-              <Detail label="Primary finding" value={lead.primaryFinding || `Finding strength ${lead.findingStrength}`} />
-              <Detail label="Current status" value={STATUS_LABELS[lead.status]} />
+              <Detail label="Call status" value={STATUS_LABELS[lead.status]} />
               <Detail label="Cold attempts" value={`${lead.coldAttemptCount} total · ${lead.coldNoAnswerCount} unanswered / ${state.settings.calling.maximumInitialAttempts}`} />
               <Detail label="Post-meeting touches" value={`${lead.postMeetingTouchCount} / ${state.settings.followUp.maximumPostMeetingTouches}`} />
-              <Detail label="Next action" value={lead.nextAction?.reason} />
+              <Detail label="Next action" value={lead.nextAction?.reason || "No future action"} />
               <Detail label="Next action date" value={lead.nextAction ? formatDateTime(lead.nextAction.dueAt) : "No future action"} />
-              <Detail label="Imported batch" value={batch?.name || "Direct entry"} />
             </div>
-            {Object.keys(lead.customFields).length ? <div className="custom-field-grid">{Object.entries(lead.customFields).map(([key, value]) => <Detail key={key} label={key} value={value} />)}</div> : null}
           </section>
 
           <section className="detail-section">
@@ -192,8 +196,8 @@ export function LeadDrawer({ leadId, onClose }: LeadDrawerProps) {
   </>;
 }
 
-function Detail({ label, value, href }: { label: string; value?: string; href?: string }) {
-  return <div><small>{label}</small>{href && value ? <a href={href}>{value}</a> : <strong>{value || "—"}</strong>}</div>;
+function Detail({ label, value, href, external = false }: { label: string; value?: string; href?: string; external?: boolean }) {
+  return <div><small>{label}</small>{href && value ? <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>{value}</a> : <strong>{value || "—"}</strong>}</div>;
 }
 
 function QuickActionModal(props: {
@@ -236,22 +240,24 @@ function EditLeadModal({ leadId, onClose }: { leadId: string | null; onClose: ()
   const [form, setForm] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!lead) return;
-    setForm({ clinicName: lead.clinicName, websiteUrl: lead.websiteUrl, city: lead.city, state: lead.state, decisionMakerName: lead.decisionMakerName, decisionMakerRole: lead.decisionMakerRole, contactType: lead.contactType, directPhone: lead.directPhone, mobilePhone: lead.mobilePhone, email: lead.email, priority: lead.priority, pixelPresent: lead.pixelPresent, primaryFinding: lead.primaryFinding, findingStrength: lead.findingStrength });
+    setForm({ clinicName: lead.clinicName, websiteUrl: lead.websiteUrl, decisionMakerFirstName: lead.decisionMakerFirstName, decisionMakerLastName: lead.decisionMakerLastName, decisionMakerRole: lead.decisionMakerRole, email: lead.email, personLinkedinUrl: lead.personLinkedinUrl, directPhone: lead.directPhone, mobilePhone: lead.mobilePhone, extension: lead.extension, city: lead.city, state: lead.state, trackingTechnologyFound: lead.trackingTechnologyFound, primaryFinding: lead.primaryFinding, priority: lead.priority });
   }, [lead]);
   if (!lead) return null;
   const field = (key: string) => ({ value: form[key] ?? "", onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((current) => ({ ...current, [key]: event.target.value })) });
   const save = () => {
-    commit("Lead updated", (current) => updateLead(current, lead.id, { ...form, contactType: form.contactType as ContactType, priority: form.priority as LeadPriority, pixelPresent: form.pixelPresent as PixelPresence, findingStrength: form.findingStrength as FindingStrength }), "Lead changes saved");
+    commit("Lead updated", (current) => updateLead(current, lead.id, { ...form, priority: form.priority as LeadPriority }), "Lead changes saved");
     onClose();
   };
   return <Modal open onClose={onClose} title="Edit lead" description="Only lead information changes; history and counters remain intact." size="lg" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={save}>Save changes</Button></>}>
     <div className="form-grid">
       <label className="field"><span>Clinic name</span><input {...field("clinicName")} /></label><label className="field"><span>Website</span><input {...field("websiteUrl")} /></label>
-      <label className="field"><span>Decision-maker</span><input {...field("decisionMakerName")} /></label><label className="field"><span>Role</span><input {...field("decisionMakerRole")} /></label>
-      <label className="field"><span>Direct phone</span><input {...field("directPhone")} /></label><label className="field"><span>Mobile phone</span><input {...field("mobilePhone")} /></label>
-      <label className="field"><span>Email</span><input type="email" {...field("email")} /></label><label className="field"><span>Contact type</span><select {...field("contactType")}>{Object.entries(CONTACT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="field"><span>First name</span><input {...field("decisionMakerFirstName")} /></label><label className="field"><span>Last name</span><input {...field("decisionMakerLastName")} /></label>
+      <label className="field"><span>Role</span><input {...field("decisionMakerRole")} /></label><label className="field"><span>Email</span><input type="email" {...field("email")} /></label>
+      <label className="field field--full"><span>LinkedIn</span><input {...field("personLinkedinUrl")} /></label>
+      <label className="field"><span>Direct phone</span><input {...field("directPhone")} /></label><label className="field"><span>Personal phone</span><input {...field("mobilePhone")} /></label>
+      <label className="field"><span>Extension</span><input {...field("extension")} /></label>
       <label className="field"><span>City</span><input {...field("city")} /></label><label className="field"><span>State</span><input {...field("state")} /></label>
-      <label className="field"><span>Pixel</span><select {...field("pixelPresent")}><option value="yes">Yes</option><option value="no">No</option><option value="unknown">Unknown</option></select></label><label className="field"><span>Finding strength</span><select {...field("findingStrength")}><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="unknown">Unknown</option></select></label>
+      <label className="field field--full"><span>Tracking Technology Found</span><input {...field("trackingTechnologyFound")} /></label>
       <label className="field field--full"><span>Primary finding</span><input {...field("primaryFinding")} /></label><label className="field"><span>Priority</span><select {...field("priority")}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     </div>
   </Modal>;

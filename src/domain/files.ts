@@ -104,8 +104,11 @@ export type LeadImportField =
   | "timeZone"
   | "specialty"
   | "practiceSize"
+  | "decisionMakerFirstName"
+  | "decisionMakerLastName"
   | "decisionMakerName"
   | "decisionMakerRole"
+  | "personLinkedinUrl"
   | "contactType"
   | "directPhone"
   | "mobilePhone"
@@ -113,6 +116,7 @@ export type LeadImportField =
   | "email"
   | "alternatePhones"
   | "pixelPresent"
+  | "trackingTechnologyFound"
   | "trackingTechnologies"
   | "primaryFinding"
   | "secondaryFinding"
@@ -142,15 +146,19 @@ export const LEAD_IMPORT_FIELDS: readonly LeadImportFieldDefinition[] = [
   { key: "timeZone", label: "Time Zone", aliases: ["time zone", "timezone", "tz", "prospect time zone"] },
   { key: "specialty", label: "Specialty", aliases: ["specialty", "practice specialty", "clinic specialty", "vertical"] },
   { key: "practiceSize", label: "Practice Size", aliases: ["practice size", "clinic size", "business size", "employees", "locations"] },
+  { key: "decisionMakerFirstName", label: "Decision-Maker First Name", aliases: ["decision-maker first name", "decision maker first name", "contact first name", "first name"] },
+  { key: "decisionMakerLastName", label: "Last Name", aliases: ["last name", "decision-maker last name", "decision maker last name", "contact last name", "surname"] },
   { key: "decisionMakerName", label: "Decision-Maker Name", aliases: ["decision maker", "decision maker name", "contact name", "prospect name", "full name", "contact"] },
   { key: "decisionMakerRole", label: "Decision-Maker Role", aliases: ["decision maker role", "contact role", "role", "title", "job title", "position"] },
+  { key: "personLinkedinUrl", label: "Person Linkedin Url", aliases: ["person linkedin url", "person linkedin", "linkedin url", "linkedin", "contact linkedin"] },
   { key: "contactType", label: "Owner / Manager", aliases: ["owner manager", "owner or manager", "contact type", "decision maker type", "contact classification", "classification"] },
   { key: "directPhone", label: "Direct Phone", aliases: ["direct phone", "phone", "phone number", "telephone", "work phone", "main phone", "direct number"] },
-  { key: "mobilePhone", label: "Mobile Phone", aliases: ["mobile", "mobile phone", "cell", "cell phone", "cellphone"] },
+  { key: "mobilePhone", label: "Personal Phone Number", aliases: ["personal phone number", "personal phone", "mobile", "mobile phone", "cell", "cell phone", "cellphone"] },
   { key: "extension", label: "Extension", aliases: ["extension", "ext", "phone extension"] },
   { key: "email", label: "Email", aliases: ["email", "email address", "contact email", "e mail"] },
   { key: "alternatePhones", label: "Alternate Phones", aliases: ["alternate phone", "alternate phones", "other phone", "other phones", "secondary phone"] },
   { key: "pixelPresent", label: "Tracking Pixel Present", aliases: ["tracking pixel", "pixel", "pixel present", "meta pixel", "tracking pixel present", "has pixel"] },
+  { key: "trackingTechnologyFound", label: "Tracking Technology Found", aliases: ["tracking technology found"] },
   { key: "trackingTechnologies", label: "Tracking Technology", aliases: ["tracking technology", "tracking technologies", "analytics technology", "pixel technology", "tags"] },
   { key: "primaryFinding", label: "Primary Finding", aliases: ["primary finding", "main finding", "finding", "security finding", "primary security finding"] },
   { key: "secondaryFinding", label: "Secondary Finding", aliases: ["secondary finding", "additional finding", "second finding"] },
@@ -342,18 +350,24 @@ export function rowToLeadDraft(
   const strings: Array<[LeadImportField, keyof LeadImportInput]> = [
     ["city", "city"], ["state", "state"], ["timeZone", "timeZone"],
     ["specialty", "specialty"], ["practiceSize", "practiceSize"],
+    ["decisionMakerFirstName", "decisionMakerFirstName"], ["decisionMakerLastName", "decisionMakerLastName"],
     ["decisionMakerName", "decisionMakerName"], ["decisionMakerRole", "decisionMakerRole"],
+    ["personLinkedinUrl", "personLinkedinUrl"],
     ["directPhone", "directPhone"], ["mobilePhone", "mobilePhone"],
     ["extension", "extension"], ["email", "email"],
     ["primaryFinding", "primaryFinding"], ["secondaryFinding", "secondaryFinding"],
     ["findingCategory", "findingCategory"], ["evidenceNotes", "evidenceNotes"],
     ["pitchNotes", "pitchNotes"], ["securityGrade", "securityGrade"],
     ["lastConversationNotes", "lastConversationNotes"], ["batchId", "batchId"],
-    ["assignedCaller", "assignedCaller"],
+    ["assignedCaller", "assignedCaller"], ["trackingTechnologyFound", "trackingTechnologyFound"],
   ];
   for (const [field, key] of strings) {
     const value = mappedValue(row, mapping, field);
-    if (value) (draft as unknown as Record<string, unknown>)[key] = value;
+    if (mapping[field] !== undefined) (draft as unknown as Record<string, unknown>)[key] = value;
+  }
+
+  if (!draft.decisionMakerName && (draft.decisionMakerFirstName || draft.decisionMakerLastName)) {
+    draft.decisionMakerName = [draft.decisionMakerFirstName, draft.decisionMakerLastName].filter(Boolean).join(" ");
   }
 
   if (websiteUrl) draft.websiteUrl = websiteUrl;
@@ -408,12 +422,14 @@ export function tableToLeadDrafts(
 
   const headers = [...table[0]].map((header) => header.trim());
   const inferred = autoMapHeaders(headers);
-  const mapping = { ...inferred, ...options.mapping };
-  const claimedColumns = new Set([
-    ...Object.values(mapping).filter((value): value is number => value !== undefined),
-    ...Object.keys(options.customColumns ?? {}).map(Number),
-  ]);
-  const unmappedHeaders = headers.filter((header, index) => header && !claimedColumns.has(index));
+  const mapping = options.mapping === undefined ? inferred : { ...options.mapping };
+  const mappedColumns = new Set(Object.values(mapping).filter((value): value is number => value !== undefined));
+  const automaticCustomColumns = headers.reduce<Record<number, string>>((columns, header, index) => {
+    if (header && !mappedColumns.has(index)) columns[index] = header;
+    return columns;
+  }, {});
+  const effectiveCustomColumns = { ...automaticCustomColumns, ...(options.customColumns ?? {}) };
+  const unmappedHeaders = headers.filter((header, index) => header && !mappedColumns.has(index));
   const rows = table.slice(1).map((row) => [...row]);
   const drafts: LeadImportInput[] = [];
   const errors: LeadImportRowError[] = [];
@@ -431,10 +447,10 @@ export function tableToLeadDrafts(
       errors.push({ rowNumber, message: "Clinic Name is required." });
       return;
     }
-    const customFields = Object.entries(options.customColumns ?? {}).reduce<Record<string, string>>((fields, [column, name]) => {
-      const value = row[Number(column)]?.trim();
+    const customFields = Object.entries(effectiveCustomColumns).reduce<Record<string, string>>((fields, [column, name]) => {
+      const value = row[Number(column)]?.trim() ?? "";
       const key = name.trim();
-      if (key && value) fields[key] = value;
+      if (key) fields[key] = value;
       return fields;
     }, {});
     drafts.push(Object.keys(customFields).length ? { ...draft, customFields } : draft);
@@ -507,7 +523,7 @@ export interface DuplicateIdentity {
   alternatePhones?: readonly string[];
 }
 
-export type DuplicateReason = "domain" | "phone" | "clinic_location";
+export type DuplicateReason = "clinic_domain" | "phone" | "clinic_location";
 
 export interface DuplicateMatch {
   lead: DuplicateIdentity;
@@ -516,6 +532,7 @@ export interface DuplicateMatch {
 }
 
 export function duplicateIdentityKeys(lead: DuplicateIdentity): {
+  clinicName: string;
   domain: string;
   phones: string[];
   clinicLocation: string;
@@ -524,6 +541,7 @@ export function duplicateIdentityKeys(lead: DuplicateIdentity): {
     .map((phone) => normalizePhone(phone ?? ""))
     .filter(Boolean);
   return {
+    clinicName: normalizeIdentityText(lead.clinicName),
     domain: normalizeDomain(lead.websiteDomain || lead.websiteUrl || ""),
     phones: [...new Set(phones)],
     clinicLocation: normalizeClinicLocation(lead.clinicName, lead.city, lead.state),
@@ -540,9 +558,14 @@ export function findDuplicateMatches(
     const reasons: DuplicateReason[] = [];
     const matchingValues: string[] = [];
 
-    if (candidateKeys.domain && candidateKeys.domain === existingKeys.domain) {
-      reasons.push("domain");
-      matchingValues.push(candidateKeys.domain);
+    if (
+      candidateKeys.clinicName
+      && candidateKeys.clinicName === existingKeys.clinicName
+      && candidateKeys.domain
+      && candidateKeys.domain === existingKeys.domain
+    ) {
+      reasons.push("clinic_domain");
+      matchingValues.push(`${candidateKeys.clinicName}|${candidateKeys.domain}`);
     }
     const matchingPhones = candidateKeys.phones.filter((phone) => existingKeys.phones.includes(phone));
     if (matchingPhones.length > 0) {
@@ -624,8 +647,9 @@ function dateCell(value: string | null): ExportCell {
 
 const LEAD_EXPORT_HEADERS = [
   "Lead ID", "Clinic Name", "Website URL", "Website Domain", "City", "State", "Time Zone",
-  "Specialty", "Practice Size", "Decision Maker", "Decision Maker Role", "Contact Type", "Direct Phone",
-  "Mobile Phone", "Extension", "Email", "Alternate Phones", "Pixel Present", "Tracking Technologies",
+  "Specialty", "Practice Size", "Decision-Maker First Name", "Last Name", "Decision Maker", "Decision Maker Role",
+  "Person Linkedin Url", "Contact Type", "Direct Phone", "Personal Phone Number", "Extension", "Email",
+  "Alternate Phones", "Tracking Technology Found", "Pixel Present", "Tracking Technologies",
   "Primary Finding", "Secondary Finding", "Finding Category", "Finding Strength", "Evidence Notes", "Pitch Notes",
   "Security Grade", "Research Completed", "Status", "Pipeline Stage", "Priority", "Cold Attempts",
   "Cold No Answers", "Recycle Cycle", "Post-Meeting Touches", "First Called At", "Last Called At", "Last Outcome",
@@ -636,8 +660,9 @@ const LEAD_EXPORT_HEADERS = [
 function leadExportRow(lead: Lead): ExportCell[] {
   return [
     lead.id, lead.clinicName, lead.websiteUrl, lead.websiteDomain, lead.city, lead.state, lead.timeZone,
-    lead.specialty, lead.practiceSize, lead.decisionMakerName, lead.decisionMakerRole, readableEnum(lead.contactType),
-    lead.directPhone, lead.mobilePhone, lead.extension, lead.email, lead.alternatePhones.join("; "),
+    lead.specialty, lead.practiceSize, lead.decisionMakerFirstName, lead.decisionMakerLastName, lead.decisionMakerName,
+    lead.decisionMakerRole, lead.personLinkedinUrl, readableEnum(lead.contactType), lead.directPhone, lead.mobilePhone,
+    lead.extension, lead.email, lead.alternatePhones.join("; "), lead.trackingTechnologyFound,
     readableEnum(lead.pixelPresent), lead.trackingTechnologies.join("; "), lead.primaryFinding, lead.secondaryFinding,
     readableEnum(lead.findingCategory), lead.findingStrength, lead.evidenceNotes, lead.pitchNotes, lead.securityGrade,
     lead.researchCompleted, readableEnum(lead.status), readableEnum(lead.pipelineStage), readableEnum(lead.priority),

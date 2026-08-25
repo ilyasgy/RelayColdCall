@@ -167,7 +167,7 @@ export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps
     <section className="panel today-queue">
       <div className="panel__header"><div><span className="eyebrow">Priorities 2–5</span><h2>Today’s call queue</h2><p>Scheduled work first, then enough new leads to fill the daily target.</p></div><Badge tone={plan.length ? "accent" : "success"} dot>{plan.length} remaining</Badge></div>
       {plan.length ? <div className="table-wrap"><table className="data-table today-table">
-        <thead><tr><th>Priority</th><th>Clinic</th><th>Decision-maker</th><th>Phone</th><th>Stage</th><th>Attempt / touch</th><th>When</th><th>Pixel / finding</th><th>Quick actions</th></tr></thead>
+        <thead><tr><th>Priority</th><th>Clinic</th><th>Decision-maker</th><th>Phone</th><th>Stage</th><th>Attempt / touch</th><th>When</th><th>Tracking Technology</th><th>Quick actions</th></tr></thead>
         <tbody>{plan.map(({ lead, category, priority }) => {
           const phone = lead.directPhone || lead.mobilePhone;
           const overdue = category !== "new" && !!lead.nextAction && new Date(lead.nextAction.dueAt).getTime() < from;
@@ -180,7 +180,7 @@ export function DashboardPage({ onNavigate, onStartCalling }: DashboardPageProps
             <td data-label="Stage"><Badge tone={STATUS_TONES[lead.status] as "info"} size="sm">{stageFor(lead)}</Badge><small>{STATUS_LABELS[lead.status]}</small></td>
             <td data-label="Attempt">{lead.pipelineStage === "post_meeting" ? <strong>Touch {lead.postMeetingTouchCount} / {state.settings.followUp.maximumPostMeetingTouches}</strong> : <strong>Attempt {lead.coldNoAnswerCount} / {state.settings.calling.maximumInitialAttempts}</strong>}</td>
             <td data-label="When"><strong className={cn(overdue && "text-danger")}>{category === "new" ? "Any time" : formatDateTime(lead.nextAction?.dueAt, { hour: "numeric", minute: "2-digit" })}</strong><small>{overdue ? "Overdue" : lead.nextAction?.exact ? "Scheduled" : "Due today"}</small></td>
-            <td data-label="Finding"><Badge tone={lead.pixelPresent === "yes" ? "purple" : "neutral"} size="sm">Pixel: {lead.pixelPresent}</Badge><small>{lead.primaryFinding || `Finding ${lead.findingStrength}`}</small></td>
+            <td data-label="Tracking"><strong>{lead.trackingTechnologyFound || "Unknown"}</strong>{lead.primaryFinding ? <small>{lead.primaryFinding}</small> : null}</td>
             <td data-label="Actions"><div className="row-actions"><Button variant="ghost" size="sm" onClick={() => void copy(lead.websiteUrl, "Website")} disabled={!lead.websiteUrl}>Copy site</Button><Button variant={workNext ? "primary" : "secondary"} size="sm" onClick={workNext ? start : () => setDrawerLeadId(lead.id)}>{workNext ? "Work next" : "Open"}</Button></div></td>
           </tr>;
         })}</tbody>
